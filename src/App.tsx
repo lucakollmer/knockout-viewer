@@ -157,8 +157,7 @@ function IntegerField({
         }
       }}
       size="small"
-      inputMode="numeric"
-      slotProps={{ htmlInput: { style: { textAlign: 'center', fontVariantNumeric: 'tabular-nums' } } }}
+      slotProps={{ htmlInput: { inputMode: 'numeric', style: { textAlign: 'center', fontVariantNumeric: 'tabular-nums' } } }}
       fullWidth
     />
   );
@@ -483,7 +482,7 @@ export default function App() {
                       onChange={(event) => setDimensionText(event.target.value.replace(/\D/g, ''))}
                       onBlur={() => commitDimension()}
                       onKeyDown={(event) => event.key === 'Enter' && event.currentTarget.blur()}
-                      inputMode="numeric"
+                      slotProps={{ htmlInput: { inputMode: 'numeric' } }}
                       fullWidth
                     />
                     <Tooltip title="Next dimension"><IconButton size="small" onClick={() => stepDimension(1)}><AddRounded /></IconButton></Tooltip>
@@ -496,10 +495,10 @@ export default function App() {
                     onChange={(event) => setModulusText(event.target.value.replace(/\D/g, ''))}
                     onBlur={() => commitModulus()}
                     onKeyDown={(event) => event.key === 'Enter' && event.currentTarget.blur()}
-                    inputMode="numeric"
                     helperText="Enter r to jump directly to one modulus; clear it to browse continuously."
                     fullWidth
                     slotProps={{
+                      htmlInput: { inputMode: 'numeric' },
                       input: exactR ? {
                         endAdornment: <IconButton size="small" onClick={() => { setModulusText(''); setExactR(undefined); }} aria-label="Browse all moduli"><ClearRounded fontSize="small" /></IconButton>,
                       } : undefined,
