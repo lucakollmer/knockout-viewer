@@ -4,11 +4,12 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "postinstall": "node scripts/workers-postinstall.mjs",
     "dev": "vite",
     "test": "vitest run",
     "typecheck": "tsc -b",
     "build": "npm run test && npm run typecheck && node scripts/write-deployment.mjs && vite build",
-    "deploy": "wrangler deploy"
+    "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
