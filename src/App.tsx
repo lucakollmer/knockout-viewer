@@ -7,6 +7,15 @@ export default function App() {
       sx={{
         minHeight: '100dvh',
         overflowX: 'hidden',
+        '& main > .MuiPaper-root': {
+          boxSizing: 'border-box',
+          height: 'clamp(360px, calc(100dvh - 150px), 720px)',
+          minHeight: '360px !important',
+          maxHeight: 1000,
+          resize: 'vertical',
+          overflow: 'hidden',
+          alignSelf: 'start',
+        },
         '& main > .MuiStack-root': {
           minHeight: 0,
           overflowY: 'auto',
@@ -23,9 +32,6 @@ export default function App() {
           },
           '& main > .MuiStack-root': {
             overflowY: 'visible',
-          },
-          '& main > .MuiPaper-root': {
-            minHeight: 420,
           },
         },
       }}
