@@ -1,32 +1,19 @@
 import { spawnSync } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 
-if (process.env.WORKERS_CI !== '1') {
-  process.exit(0);
-}
+if (process.env.WORKERS_CI !== '1') process.exit(0);
 
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const typecheck = spawnSync(npm, ['run', 'typecheck'], {
+const tsc = resolve('node_modules', '.bin', process.platform === 'win32' ? 'tsc.cmd' : 'tsc');
+const result = spawnSync(tsc, ['-p', 'tsconfig.app.json', '--noEmit'], {
   stdio: 'inherit',
   env: process.env,
 });
-
-if (typecheck.error) {
-  console.error(typecheck.error);
+if (result.error) {
+  console.error(result.error);
   process.exit(1);
 }
-if (typecheck.status !== 0) {
-  process.exit(typecheck.status ?? 1);
-}
+if (result.status !== 0) process.exit(result.status ?? 1);
 
 await mkdir('dist', { recursive: true });
-await writeFile(
-  'dist/index.html',
-  '<!doctype html><meta charset="utf-8"><title>Knockout viewer typecheck probe</title><p>Typecheck probe only; this is not an application release.</p>',
-  'utf8',
-);
-await writeFile(
-  'dist/deployment.json',
-  `${JSON.stringify({ sha: process.env.WORKERS_CI_COMMIT_SHA ?? null, probe: 'typecheck-passed' }, null, 2)}\n`,
-  'utf8',
-);
+await writeFile('dist/index.html', '<!doctype html><meta charset="utf-8"><title>Knockout viewer app-typecheck probe</title><p>App typecheck probe only; not a release.</p>', 'utf8');
