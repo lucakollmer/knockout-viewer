@@ -7,29 +7,17 @@ import {
   CardContent,
   Chip,
   CssBaseline,
-  IconButton,
-  LinearProgress,
   Paper,
   Stack,
   TextField,
-  Tooltip,
   Typography,
   createTheme,
   ThemeProvider,
-  useMediaQuery,
 } from '@mui/material';
-import AddRounded from '@mui/icons-material/AddRounded';
-import RemoveRounded from '@mui/icons-material/RemoveRounded';
-import ClearRounded from '@mui/icons-material/ClearRounded';
-import ArrowBackRounded from '@mui/icons-material/ArrowBackRounded';
-import ArrowForwardRounded from '@mui/icons-material/ArrowForwardRounded';
-import OpenInBrowserRounded from '@mui/icons-material/OpenInBrowserRounded';
-import { DataGrid, useGridApiRef, type GridColDef } from '@mui/x-data-grid';
 import { emptyDirectValues, resolveDirectValues, type DirectField, type DirectValues } from './directInput';
-import { type GroupRow } from './groupMath';
+import type { GroupRow } from './groupMath';
 
 const theme = createTheme({
-  colorSchemes: { light: true, dark: true },
   typography: {
     fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     h5: { fontWeight: 700, letterSpacing: '-0.02em' },
@@ -73,32 +61,46 @@ function useGroupNavigator(d: number, exactR?: number) {
     const runId = runIdRef.current;
     rowCountRef.current = 0;
     setRows([]);
-    setStatus({ computing: true, currentR: exactR ?? 2, lastCompletedR: null, cacheHits: 0, lastDurationMs: null, error: null, exactDone: false });
+    setStatus({
+      computing: true,
+      currentR: exactR ?? 2,
+      lastCompletedR: null,
+      cacheHits: 0,
+      lastDurationMs: null,
+      error: null,
+      exactDone: false,
+    });
 
     const worker = new Worker(new URL('./workers/groupNavigator.worker.ts', import.meta.url), { type: 'module' });
     workerRef.current = worker;
-    worker.onmessage = (event) => {
-      const message = event.data;
+    worker.onmessage = (event: MessageEvent) => {
+      const message = event.data as Record<string, unknown>;
       if (message.runId !== runId) return;
       if (message.type === 'batch') {
+        const newRows = message.rows as GroupRow[];
         setRows((previous) => {
-          const next = [...previous, ...message.rows];
+          const next = previous.concat(newRows);
           rowCountRef.current = next.length;
           return next;
         });
         setStatus((previous) => ({
           ...previous,
           computing: false,
-          currentR: message.r,
-          lastCompletedR: message.r,
+          currentR: message.r as number,
+          lastCompletedR: message.r as number,
           cacheHits: previous.cacheHits + (message.cached ? 1 : 0),
-          lastDurationMs: message.durationMs,
+          lastDurationMs: message.durationMs as number,
           exactDone: Boolean(message.done),
         }));
       } else if (message.type === 'progress') {
-        setStatus((previous) => ({ ...previous, computing: Boolean(message.computing), currentR: message.r, exactDone: Boolean(message.done) }));
+        setStatus((previous) => ({
+          ...previous,
+          computing: Boolean(message.computing),
+          currentR: message.r as number,
+          exactDone: Boolean(message.done),
+        }));
       } else if (message.type === 'error') {
-        setStatus((previous) => ({ ...previous, computing: false, error: message.message }));
+        setStatus((previous) => ({ ...previous, computing: false, error: String(message.message) }));
       }
     };
     worker.postMessage({ type: 'start', runId, d, r: exactR, targetRows: 500 });
@@ -121,7 +123,7 @@ function GroupNotation({ row }: { row: GroupRow }) {
   const block = (residue: number, multiplicity: number) => (
     <Box component="span" sx={{ whiteSpace: 'nowrap' }}>
       {residue}
-      {multiplicity !== 1 && <Box component="sup" sx={{ fontSize: '0.72em', ml: 0.15 }}>{multiplicity}</Box>}
+      {multiplicity !== 1 ? <Box component="sup" sx={{ fontSize: '0.72em', ml: 0.15 }}>{multiplicity}</Box> : null}
     </Box>
   );
   return (
@@ -157,7 +159,6 @@ function IntegerField({
         }
       }}
       size="small"
-      slotProps={{ htmlInput: { inputMode: 'numeric', style: { textAlign: 'center', fontVariantNumeric: 'tabular-nums' } } }}
       fullWidth
     />
   );
@@ -177,17 +178,18 @@ function DirectSelector({ onOpen }: { onOpen: (row: GroupRow) => void }) {
     let worker: Worker | null = null;
     const timer = window.setTimeout(() => {
       worker = new Worker(new URL('./workers/directCanonicalize.worker.ts', import.meta.url), { type: 'module' });
-      worker.onmessage = (event) => {
-        if (event.data.type === 'result') {
-          setCanonical(event.data.canonical);
-          setCanonicalError(event.data.canonical ? null : 'This presentation has trivial effective image.');
-        } else if (event.data.type === 'error') {
+      worker.onmessage = (event: MessageEvent) => {
+        const message = event.data as { type: string; canonical?: GroupRow | null; message?: string };
+        if (message.type === 'result') {
+          setCanonical(message.canonical ?? null);
+          setCanonicalError(message.canonical ? null : 'This presentation has trivial effective image.');
+        } else if (message.type === 'error') {
           setCanonical(null);
-          setCanonicalError(event.data.message);
+          setCanonicalError(message.message ?? 'Canonicalization failed.');
         }
       };
       worker.postMessage({ type: 'canonicalize', requestId: 1, group: resolution.group });
-    }, 90);
+    }, 80);
 
     return () => {
       window.clearTimeout(timer);
@@ -219,14 +221,11 @@ function DirectSelector({ onOpen }: { onOpen: (row: GroupRow) => void }) {
   return (
     <Card variant="outlined">
       <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-        <Stack spacing={1.5}>
+        <Stack spacing={1.4}>
           <Box>
             <Typography variant="subtitle1">Direct selection</Typography>
-            <Typography variant="caption" color="text.secondary">
-              Leave one value blank in either row when it can be inferred.
-            </Typography>
+            <Typography variant="caption" color="text.secondary">Leave one value blank in either row when it can be inferred.</Typography>
           </Box>
-
           <Box>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.6 }}>Dimension and multiplicities</Typography>
             {renderFields(['d', 'n', 'm', 'k'])}
@@ -236,24 +235,24 @@ function DirectSelector({ onOpen }: { onOpen: (row: GroupRow) => void }) {
             {renderFields(['r', 'a', 'b', 'c'])}
           </Box>
 
-          {inferredText && <Typography variant="caption" color="primary.main">Inferred: {inferredText}</Typography>}
+          {inferredText ? <Typography variant="caption" color="primary">Inferred: {inferredText}</Typography> : null}
 
-          {resolution.choice && (
+          {resolution.choice ? (
             <Box>
               <Typography variant="caption" color="text.secondary">{resolution.choice.reason}</Typography>
               <Stack direction="row" useFlexGap flexWrap="wrap" gap={0.6} sx={{ mt: 0.7 }}>
                 {resolution.choice.values.slice(0, 18).map((value) => (
                   <Chip key={value} size="small" label={`${resolution.choice?.field}=${value}`} onClick={() => choose(resolution.choice!.field, value)} />
                 ))}
-                {resolution.choice.values.length > 18 && <Chip size="small" variant="outlined" label={`+${resolution.choice.values.length - 18} more — enter one`} />}
+                {resolution.choice.values.length > 18 ? <Chip size="small" variant="outlined" label={`+${resolution.choice.values.length - 18} more`} /> : null}
               </Stack>
             </Box>
-          )}
+          ) : null}
 
-          {(resolution.error || canonicalError) && <Alert severity="error" sx={{ py: 0 }}>{resolution.error ?? canonicalError}</Alert>}
-          {!resolution.error && resolution.hint && <Alert severity="info" sx={{ py: 0 }}>{resolution.hint}</Alert>}
+          {resolution.error || canonicalError ? <Alert severity="error" sx={{ py: 0 }}>{resolution.error ?? canonicalError}</Alert> : null}
+          {!resolution.error && resolution.hint ? <Alert severity="info" sx={{ py: 0 }}>{resolution.hint}</Alert> : null}
 
-          {canonical && (
+          {canonical ? (
             <Paper variant="outlined" sx={{ p: 1.25, bgcolor: 'action.hover' }}>
               <Typography variant="caption" color="text.secondary">Canonical effective presentation</Typography>
               <Box sx={{ mt: 0.25 }}><GroupNotation row={canonical} /></Box>
@@ -261,21 +260,13 @@ function DirectSelector({ onOpen }: { onOpen: (row: GroupRow) => void }) {
                 d={canonical.d}, r={canonical.r}; C-first global ordering
               </Typography>
             </Paper>
-          )}
+          ) : null}
 
           <Stack direction="row" spacing={1}>
-            <Button
-              variant="contained"
-              startIcon={<OpenInBrowserRounded />}
-              disabled={!canonical}
-              onClick={() => canonical && onOpen(canonical)}
-              fullWidth
-            >
+            <Button variant="contained" disabled={!canonical} onClick={() => canonical && onOpen(canonical)} fullWidth>
               Open in browser
             </Button>
-            <Tooltip title="Clear direct-selection fields">
-              <span><IconButton onClick={() => setValues(emptyDirectValues())} aria-label="Clear direct selection"><ClearRounded /></IconButton></span>
-            </Tooltip>
+            <Button variant="outlined" onClick={() => setValues(emptyDirectValues())}>Clear</Button>
           </Stack>
         </Stack>
       </CardContent>
@@ -283,35 +274,158 @@ function DirectSelector({ onOpen }: { onOpen: (row: GroupRow) => void }) {
   );
 }
 
+const ROW_HEIGHT = 42;
+const OVERSCAN = 12;
+
+function VirtualGroupTable({
+  rows,
+  selected,
+  onSelect,
+  onNeedMore,
+}: {
+  rows: GroupRow[];
+  selected: GroupRow | null;
+  onSelect: (row: GroupRow) => void;
+  onNeedMore: () => void;
+}) {
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(500);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const update = () => setViewportHeight(viewport.clientHeight || 500);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, []);
+
+  const selectedIndex = selected ? rows.findIndex((row) => row.id === selected.id) : -1;
+  useEffect(() => {
+    if (selectedIndex < 0 || !viewportRef.current) return;
+    const top = selectedIndex * ROW_HEIGHT;
+    const bottom = top + ROW_HEIGHT;
+    const currentTop = viewportRef.current.scrollTop;
+    const currentBottom = currentTop + viewportRef.current.clientHeight;
+    if (top < currentTop || bottom > currentBottom) {
+      viewportRef.current.scrollTo({ top: Math.max(0, top - viewportRef.current.clientHeight / 3) });
+    }
+  }, [selectedIndex, rows.length]);
+
+  const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
+  const end = Math.min(rows.length, Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN);
+  const visible = rows.slice(start, end);
+
+  const handleScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    const element = event.currentTarget;
+    setScrollTop(element.scrollTop);
+    if (element.scrollHeight - element.scrollTop - element.clientHeight < 1_200) onNeedMore();
+  };
+
+  const headerCell = (label: string, hideSmall = false) => (
+    <Typography
+      key={label}
+      variant="caption"
+      sx={{
+        fontWeight: 700,
+        color: 'text.secondary',
+        textAlign: label === 'Group' ? 'left' : 'right',
+        display: hideSmall ? { xs: 'none', md: 'block' } : 'block',
+      }}
+    >
+      {label}
+    </Typography>
+  );
+
+  const numericCell = (value: number, hideSmall = true) => (
+    <Typography
+      variant="body2"
+      sx={{
+        textAlign: 'right',
+        fontVariantNumeric: 'tabular-nums',
+        color: 'text.secondary',
+        display: hideSmall ? { xs: 'none', md: 'block' } : 'block',
+      }}
+    >
+      {value}
+    </Typography>
+  );
+
+  const gridColumns = { xs: 'minmax(0, 1fr) 54px', md: 'minmax(230px, 1fr) repeat(8, 54px)' };
+
+  return (
+    <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }} role="table" aria-label="Canonical groups">
+      <Box sx={{ display: 'grid', gridTemplateColumns: gridColumns, gap: 0.75, px: 1.5, py: 1, borderBottom: 1, borderColor: 'divider', bgcolor: 'action.hover' }} role="row">
+        {headerCell('Group')}
+        {headerCell('d', true)}
+        {headerCell('r')}
+        {headerCell('n', true)}
+        {headerCell('m', true)}
+        {headerCell('k', true)}
+        {headerCell('a', true)}
+        {headerCell('b', true)}
+        {headerCell('c', true)}
+      </Box>
+      <Box ref={viewportRef} onScroll={handleScroll} sx={{ flex: 1, minHeight: 0, overflowY: 'auto', position: 'relative' }}>
+        <Box sx={{ height: rows.length * ROW_HEIGHT, position: 'relative' }}>
+          {visible.map((row, offset) => {
+            const index = start + offset;
+            const active = row.id === selected?.id;
+            return (
+              <Box
+                key={row.id}
+                role="row"
+                tabIndex={0}
+                onClick={() => onSelect(row)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') onSelect(row);
+                }}
+                sx={{
+                  position: 'absolute',
+                  top: index * ROW_HEIGHT,
+                  left: 0,
+                  right: 0,
+                  height: ROW_HEIGHT,
+                  display: 'grid',
+                  gridTemplateColumns: gridColumns,
+                  gap: 0.75,
+                  alignItems: 'center',
+                  px: 1.5,
+                  borderBottom: 1,
+                  borderColor: 'divider',
+                  cursor: 'pointer',
+                  bgcolor: active ? 'action.selected' : 'background.paper',
+                  '&:hover': { bgcolor: active ? 'action.selected' : 'action.hover' },
+                  '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: -2 },
+                }}
+              >
+                <Box sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}><GroupNotation row={row} /></Box>
+                {numericCell(row.d)}
+                {numericCell(row.r, false)}
+                {numericCell(row.n)}
+                {numericCell(row.m)}
+                {numericCell(row.k)}
+                {numericCell(row.a)}
+                {numericCell(row.b)}
+                {numericCell(row.c)}
+              </Box>
+            );
+          })}
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
 export default function App() {
   const [dimension, setDimension] = useState(3);
   const [dimensionText, setDimensionText] = useState('3');
-  const [exactR, setExactR] = useState<number | undefined>(undefined);
+  const [exactR, setExactR] = useState<number | undefined>();
   const [modulusText, setModulusText] = useState('');
   const [selected, setSelected] = useState<GroupRow | null>(null);
   const { rows, status, requestMore } = useGroupNavigator(dimension, exactR);
-  const apiRef = useGridApiRef();
-  const gridHostRef = useRef<HTMLDivElement | null>(null);
-  const compact = useMediaQuery(theme.breakpoints.down('md'));
-
-  useEffect(() => {
-    const scroller = gridHostRef.current?.querySelector<HTMLElement>('.MuiDataGrid-virtualScroller');
-    if (!scroller) return;
-
-    let scheduled = false;
-    const maybeLoadMore = () => {
-      if (scheduled) return;
-      scheduled = true;
-      window.requestAnimationFrame(() => {
-        scheduled = false;
-        const remaining = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-        if (remaining < 1_200) requestMore();
-      });
-    };
-
-    scroller.addEventListener('scroll', maybeLoadMore, { passive: true });
-    return () => scroller.removeEventListener('scroll', maybeLoadMore);
-  }, [requestMore, rows.length]);
 
   const commitDimension = useCallback((text = dimensionText) => {
     const parsed = Number(text);
@@ -355,53 +469,21 @@ export default function App() {
     setSelected(row);
   }, []);
 
-  useEffect(() => {
-    if (!selected) return;
-    const index = rows.findIndex((row) => row.id === selected.id);
-    if (index >= 0) apiRef.current?.scrollToIndexes({ rowIndex: index });
-  }, [apiRef, rows, selected]);
-
   const selectedIndex = selected ? rows.findIndex((row) => row.id === selected.id) : -1;
   const selectOffset = (delta: number) => {
     if (rows.length === 0) return;
     const base = selectedIndex >= 0 ? selectedIndex : 0;
     const next = Math.min(rows.length - 1, Math.max(0, base + delta));
     setSelected(rows[next]);
-    apiRef.current?.scrollToIndexes({ rowIndex: next });
   };
 
-  const columns = useMemo<GridColDef<GroupRow>[]>(() => [
-    {
-      field: 'notation',
-      headerName: 'Group',
-      minWidth: 250,
-      flex: 1,
-      sortable: false,
-      renderCell: (params) => <GroupNotation row={params.row} />,
-    },
-    { field: 'd', headerName: 'd', width: 58, sortable: false, align: 'right', headerAlign: 'right' },
-    { field: 'r', headerName: 'r', width: 64, sortable: false, align: 'right', headerAlign: 'right' },
-    { field: 'n', headerName: 'n', width: 58, sortable: false, align: 'right', headerAlign: 'right' },
-    { field: 'm', headerName: 'm', width: 58, sortable: false, align: 'right', headerAlign: 'right' },
-    { field: 'k', headerName: 'k', width: 58, sortable: false, align: 'right', headerAlign: 'right' },
-    { field: 'a', headerName: 'a', width: 58, sortable: false, align: 'right', headerAlign: 'right' },
-    { field: 'b', headerName: 'b', width: 58, sortable: false, align: 'right', headerAlign: 'right' },
-    { field: 'c', headerName: 'c', width: 58, sortable: false, align: 'right', headerAlign: 'right' },
-  ], []);
-
-  const columnVisibilityModel = compact
-    ? { d: false, n: false, m: false, k: false, a: false, b: false, c: false }
-    : {};
-
   return (
-    <ThemeProvider theme={theme} noSsr>
+    <ThemeProvider theme={theme}>
       <CssBaseline />
       <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
         <Box component="header" sx={{ px: { xs: 2, md: 3 }, py: 2, borderBottom: 1, borderColor: 'divider' }}>
           <Typography variant="h5">Knockout group browser</Typography>
-          <Typography variant="body2" color="text.secondary">
-            Canonical effective cyclic SL three-block presentations, generated locally as you navigate.
-          </Typography>
+          <Typography variant="body2" color="text.secondary">Canonical effective cyclic SL three-block presentations, generated locally as you navigate.</Typography>
         </Box>
 
         <Box
@@ -420,9 +502,7 @@ export default function App() {
               <Stack direction={{ xs: 'column', sm: 'row' }} alignItems={{ sm: 'center' }} justifyContent="space-between" spacing={1}>
                 <Box>
                   <Typography variant="subtitle1">Canonical groups</Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    Order: r, then k, m, n, a, b, c. Scroll to generate more.
-                  </Typography>
+                  <Typography variant="caption" color="text.secondary">Order: r, then k, m, n, a, b, c. Scroll to generate more.</Typography>
                 </Box>
                 <Stack direction="row" spacing={0.75} alignItems="center" useFlexGap flexWrap="wrap">
                   <Chip size="small" label={`${rows.length.toLocaleString()} loaded`} />
@@ -431,82 +511,53 @@ export default function App() {
                   ) : (
                     <Chip size="small" variant="outlined" label={`r=${exactR}${status.exactDone ? ' complete' : ''}`} />
                   )}
-                  {status.cacheHits > 0 && <Chip size="small" variant="outlined" label={`${status.cacheHits} cached`} />}
+                  {status.cacheHits > 0 ? <Chip size="small" variant="outlined" label={`${status.cacheHits} cached`} /> : null}
+                  {status.computing ? <Chip size="small" color="primary" label="generating…" /> : null}
                 </Stack>
               </Stack>
             </Box>
-            {status.computing && <LinearProgress />}
-            {status.error && <Alert severity="error" sx={{ borderRadius: 0 }}>{status.error}</Alert>}
-            <Box ref={gridHostRef} sx={{ flex: 1, minHeight: 0 }}>
-              <DataGrid
-                apiRef={apiRef}
-                rows={rows}
-                columns={columns}
-                hideFooter
-                disableColumnMenu
-                disableRowSelectionOnClick
-                columnVisibilityModel={columnVisibilityModel}
-                rowHeight={42}
-                columnHeaderHeight={40}
-                onRowClick={(params) => setSelected(params.row)}
-                onCellKeyDown={(params, event) => {
-                  if (event.key === 'Enter') setSelected(params.row);
-                }}
-                getRowClassName={(params) => params.row.id === selected?.id ? 'selected-row' : ''}
-                sx={{
-                  border: 0,
-                  '& .MuiDataGrid-columnHeaders': { bgcolor: 'action.hover' },
-                  '& .MuiDataGrid-row': { cursor: 'pointer' },
-                  '& .selected-row': { bgcolor: 'action.selected' },
-                  '& .selected-row:hover': { bgcolor: 'action.selected' },
-                  '& .MuiDataGrid-cell:focus, & .MuiDataGrid-columnHeader:focus': { outline: 'none' },
-                }}
-              />
-            </Box>
+            {status.error ? <Alert severity="error" sx={{ borderRadius: 0 }}>{status.error}</Alert> : null}
+            <VirtualGroupTable rows={rows} selected={selected} onSelect={setSelected} onNeedMore={requestMore} />
           </Paper>
 
           <Stack spacing={1.5} sx={{ minHeight: 0, overflowY: { lg: 'auto' }, pr: { lg: 0.5 } }}>
             <Card variant="outlined">
               <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-                <Stack spacing={1.5}>
+                <Stack spacing={1.3}>
                   <Box>
                     <Typography variant="subtitle1">Browse</Typography>
                     <Typography variant="caption" color="text.secondary">Choose a dimension; leave r blank for continuous enumeration.</Typography>
                   </Box>
                   <Stack direction="row" spacing={0.75} alignItems="center">
-                    <Tooltip title="Previous dimension"><IconButton size="small" onClick={() => stepDimension(-1)} disabled={dimension <= 3}><RemoveRounded /></IconButton></Tooltip>
+                    <Button variant="outlined" onClick={() => stepDimension(-1)} disabled={dimension <= 3} aria-label="Previous dimension">−</Button>
                     <TextField
                       label="Dimension d"
                       size="small"
                       value={dimensionText}
                       onChange={(event) => setDimensionText(event.target.value.replace(/\D/g, ''))}
                       onBlur={() => commitDimension()}
-                      onKeyDown={(event) => event.key === 'Enter' && event.currentTarget.blur()}
-                      slotProps={{ htmlInput: { inputMode: 'numeric' } }}
+                      onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
                       fullWidth
                     />
-                    <Tooltip title="Next dimension"><IconButton size="small" onClick={() => stepDimension(1)}><AddRounded /></IconButton></Tooltip>
+                    <Button variant="outlined" onClick={() => stepDimension(1)} aria-label="Next dimension">+</Button>
                   </Stack>
-                  <TextField
-                    label="Modulus r (optional)"
-                    size="small"
-                    value={modulusText}
-                    placeholder="All moduli"
-                    onChange={(event) => setModulusText(event.target.value.replace(/\D/g, ''))}
-                    onBlur={() => commitModulus()}
-                    onKeyDown={(event) => event.key === 'Enter' && event.currentTarget.blur()}
-                    helperText="Enter r to jump directly to one modulus; clear it to browse continuously."
-                    fullWidth
-                    slotProps={{
-                      htmlInput: { inputMode: 'numeric' },
-                      input: exactR ? {
-                        endAdornment: <IconButton size="small" onClick={() => { setModulusText(''); setExactR(undefined); }} aria-label="Browse all moduli"><ClearRounded fontSize="small" /></IconButton>,
-                      } : undefined,
-                    }}
-                  />
-                  {status.lastDurationMs !== null && status.lastDurationMs > 250 && (
+                  <Stack direction="row" spacing={0.75} alignItems="flex-start">
+                    <TextField
+                      label="Modulus r (optional)"
+                      size="small"
+                      value={modulusText}
+                      placeholder="All moduli"
+                      onChange={(event) => setModulusText(event.target.value.replace(/\D/g, ''))}
+                      onBlur={() => commitModulus()}
+                      onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+                      helperText="Enter r to jump directly to one modulus; clear it to browse continuously."
+                      fullWidth
+                    />
+                    {exactR !== undefined ? <Button variant="outlined" onClick={() => { setModulusText(''); setExactR(undefined); }}>All</Button> : null}
+                  </Stack>
+                  {status.lastDurationMs !== null && status.lastDurationMs > 250 ? (
                     <Typography variant="caption" color="text.secondary">Last uncached batch: {(status.lastDurationMs / 1000).toFixed(2)} s</Typography>
-                  )}
+                  ) : null}
                 </Stack>
               </CardContent>
             </Card>
@@ -521,22 +572,18 @@ export default function App() {
                       d={selected.d}, r={selected.r}; n,m,k=({selected.n},{selected.m},{selected.k}); a,b,c=({selected.a},{selected.b},{selected.c})
                     </Typography>
                     <Stack direction="row" spacing={1}>
-                      <Button size="small" variant="outlined" startIcon={<ArrowBackRounded />} disabled={selectedIndex <= 0} onClick={() => selectOffset(-1)} fullWidth>Previous</Button>
-                      <Button size="small" variant="outlined" endIcon={<ArrowForwardRounded />} disabled={selectedIndex < 0 || selectedIndex >= rows.length - 1} onClick={() => selectOffset(1)} fullWidth>Next</Button>
+                      <Button size="small" variant="outlined" disabled={selectedIndex <= 0} onClick={() => selectOffset(-1)} fullWidth>Previous</Button>
+                      <Button size="small" variant="outlined" disabled={selectedIndex < 0 || selectedIndex >= rows.length - 1} onClick={() => selectOffset(1)} fullWidth>Next</Button>
                     </Stack>
                   </Stack>
-                ) : (
-                  <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>Click a row or use direct selection.</Typography>
-                )}
+                ) : <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>Click a row or use direct selection.</Typography>}
               </CardContent>
             </Card>
 
             <DirectSelector onOpen={openDirect} />
 
             <Box sx={{ px: 0.5, pb: 1 }}>
-              <Typography variant="caption" color="text.secondary">
-                Enumeration runs entirely in your browser. Generated (d,r) batches are cached locally on this device.
-              </Typography>
+              <Typography variant="caption" color="text.secondary">Enumeration runs entirely in your browser. Generated (d,r) batches are cached locally on this device.</Typography>
             </Box>
           </Stack>
         </Box>
