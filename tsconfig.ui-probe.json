@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.app.json",
+  "include": [
+    "src/main.tsx",
+    "src/App.tsx",
+    "src/directInput.ts",
+    "src/groupMath.ts"
+  ],
+  "exclude": ["src/workers/**"]
+}
