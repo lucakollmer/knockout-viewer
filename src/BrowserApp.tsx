@@ -283,20 +283,33 @@ export default function BrowserApp() {
   const applyDimension = () => {
     const parsed = Number(dimensionText);
     if (!Number.isSafeInteger(parsed) || parsed < 3) { setDimensionText(String(dimension)); return; }
-    setDimension(parsed); setDimensionText(String(parsed));
+    setDimension(parsed);
+    setDimensionText(String(parsed));
     if (selected?.d !== parsed) setSelected(null);
+  };
+
+  const stepDimension = (delta: number) => {
+    const next = Math.max(3, dimension + delta);
+    setDimension(next);
+    setDimensionText(String(next));
+    setSelected(null);
   };
 
   const applyModulus = () => {
     if (!modulusText.trim()) { setExactR(undefined); return; }
     const parsed = Number(modulusText);
     if (!Number.isSafeInteger(parsed) || parsed < 2) { setModulusText(exactR === undefined ? '' : String(exactR)); return; }
-    setExactR(parsed); setModulusText(String(parsed));
+    setExactR(parsed);
+    setModulusText(String(parsed));
     if (selected?.d !== dimension || selected.r !== parsed) setSelected(null);
   };
 
   const openDirect = (row: GroupRow) => {
-    setDimension(row.d); setDimensionText(String(row.d)); setExactR(row.r); setModulusText(String(row.r)); setSelected(row);
+    setDimension(row.d);
+    setDimensionText(String(row.d));
+    setExactR(row.r);
+    setModulusText(String(row.r));
+    setSelected(row);
   };
 
   const selectedIndex = selected ? rows.findIndex((row) => row.id === selected.id) : -1;
@@ -317,12 +330,26 @@ export default function BrowserApp() {
         <Box component="main" sx={{ p: { xs: 1.5, md: 2.5 }, display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(0,1fr) 390px' }, gap: 2, height: { lg: 'calc(100vh - 86px)' }, minHeight: 0 }}>
           <Paper variant="outlined" sx={{ minHeight: { xs: 560, lg: 0 }, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <Box sx={{ px: 1.5, py: 1, borderBottom: 1, borderColor: 'divider' }}>
-              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ justifyContent: 'space-between' }}>
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} sx={{ justifyContent: 'space-between', alignItems: { md: 'center' } }}>
                 <Box>
                   <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Canonical groups</Typography>
                   <Typography variant="caption" color="text.secondary">Order: r, then k, m, n, a, b, c. Scroll to generate more.</Typography>
                 </Box>
-                <Stack direction="row" useFlexGap sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+                <Stack direction="row" useFlexGap sx={{ flexWrap: 'wrap', gap: 0.75, alignItems: 'center', justifyContent: { md: 'flex-end' } }}>
+                  <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
+                    <Button variant="outlined" size="small" aria-label="Previous dimension" disabled={dimension <= 3} onClick={() => stepDimension(-1)} sx={{ minWidth: 34, px: 1 }}>−</Button>
+                    <TextField
+                      label="d"
+                      value={dimensionText}
+                      onChange={(event) => setDimensionText(event.target.value.replace(/\D/g, ''))}
+                      onBlur={applyDimension}
+                      onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+                      size="small"
+                      sx={{ width: 88 }}
+                      slotProps={{ htmlInput: { inputMode: 'numeric', 'aria-label': 'Dimension d' } }}
+                    />
+                    <Button variant="outlined" size="small" aria-label="Next dimension" onClick={() => stepDimension(1)} sx={{ minWidth: 34, px: 1 }}>+</Button>
+                  </Stack>
                   <Chip size="small" label={`${rows.length.toLocaleString()} loaded`} />
                   <Chip size="small" variant="outlined" label={exactR === undefined ? (status.lastCompletedR ? `through r=${status.lastCompletedR}` : 'starting r=2') : `r=${exactR}`} />
                   {status.computing ? <Chip size="small" color="primary" label="generating…" /> : null}
@@ -336,12 +363,7 @@ export default function BrowserApp() {
 
           <Stack spacing={1.5} sx={{ minHeight: 0, overflowY: { lg: 'auto' } }}>
             <Card variant="outlined"><CardContent><Stack spacing={1.25}>
-              <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Browse</Typography>
-              <Stack direction="row" spacing={0.75}>
-                <Button variant="outlined" disabled={dimension <= 3} onClick={() => { const next = Math.max(3, dimension - 1); setDimension(next); setDimensionText(String(next)); setSelected(null); }}>−</Button>
-                <TextField label="Dimension d" value={dimensionText} onChange={(event) => setDimensionText(event.target.value.replace(/\D/g, ''))} onBlur={applyDimension} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} size="small" fullWidth />
-                <Button variant="outlined" onClick={() => { const next = dimension + 1; setDimension(next); setDimensionText(String(next)); setSelected(null); }}>+</Button>
-              </Stack>
+              <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Modulus</Typography>
               <Stack direction="row" spacing={0.75} sx={{ alignItems: 'flex-start' }}>
                 <TextField label="Modulus r (optional)" value={modulusText} placeholder="All moduli" onChange={(event) => setModulusText(event.target.value.replace(/\D/g, ''))} onBlur={applyModulus} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} size="small" fullWidth />
                 {exactR === undefined ? null : <Button variant="outlined" onClick={() => { setExactR(undefined); setModulusText(''); setSelected(null); }}>All</Button>}
