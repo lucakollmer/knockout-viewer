@@ -2,9 +2,8 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "knockout-viewer",
   "compatibility_date": "2026-08-26",
-  "preview_urls": true,
   "build": {
-    "command": "node scripts/diagnose-build.mjs"
+    "command": "npm run test && node scripts/minimal-dist.mjs"
   },
   "assets": {
     "directory": "./dist",
