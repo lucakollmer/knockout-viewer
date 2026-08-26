@@ -1,11 +1,13 @@
 {
   "extends": "./tsconfig.app.json",
   "compilerOptions": {
-    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": false
   },
   "include": [
     "src/main.tsx",
     "src/App.tsx",
+    "src/BrowserApp.tsx",
     "src/directInput.ts",
     "src/groupMath.ts"
   ],
