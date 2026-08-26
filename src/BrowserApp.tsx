@@ -280,28 +280,59 @@ export default function BrowserApp() {
   const [selected, setSelected] = useState<GroupRow | null>(null);
   const { rows, status, requestMore } = useGroupNavigator(dimension, exactR);
 
-  const applyDimension = () => {
-    const parsed = Number(dimensionText);
-    if (!Number.isSafeInteger(parsed) || parsed < 3) { setDimensionText(String(dimension)); return; }
+  const updateDimension = (value: string) => {
+    setDimensionText(value);
+    if (!value.trim()) return;
+    const parsed = Number(value);
+    if (!Number.isSafeInteger(parsed) || parsed < 3 || parsed === dimension) return;
     setDimension(parsed);
-    setDimensionText(String(parsed));
-    if (selected?.d !== parsed) setSelected(null);
-  };
-
-  const stepDimension = (delta: number) => {
-    const next = Math.max(3, dimension + delta);
-    setDimension(next);
-    setDimensionText(String(next));
     setSelected(null);
   };
 
-  const applyModulus = () => {
-    if (!modulusText.trim()) { setExactR(undefined); return; }
-    const parsed = Number(modulusText);
-    if (!Number.isSafeInteger(parsed) || parsed < 2) { setModulusText(exactR === undefined ? '' : String(exactR)); return; }
+  const applyDimension = () => {
+    const parsed = Number(dimensionText);
+    if (!Number.isSafeInteger(parsed) || parsed < 3) {
+      setDimensionText(String(dimension));
+      return;
+    }
+    if (parsed !== dimension) {
+      setDimension(parsed);
+      setSelected(null);
+    }
+    setDimensionText(String(parsed));
+  };
+
+  const updateModulus = (value: string) => {
+    setModulusText(value);
+    if (!value.trim()) {
+      if (exactR !== undefined) {
+        setExactR(undefined);
+        setSelected(null);
+      }
+      return;
+    }
+    const parsed = Number(value);
+    if (!Number.isSafeInteger(parsed) || parsed < 2 || parsed === exactR) return;
     setExactR(parsed);
-    setModulusText(String(parsed));
     if (selected?.d !== dimension || selected.r !== parsed) setSelected(null);
+  };
+
+  const applyModulus = () => {
+    if (!modulusText.trim()) {
+      setExactR(undefined);
+      setModulusText('');
+      return;
+    }
+    const parsed = Number(modulusText);
+    if (!Number.isSafeInteger(parsed) || parsed < 2) {
+      setModulusText(exactR === undefined ? '' : String(exactR));
+      return;
+    }
+    if (parsed !== exactR) {
+      setExactR(parsed);
+      if (selected?.d !== dimension || selected.r !== parsed) setSelected(null);
+    }
+    setModulusText(String(parsed));
   };
 
   const openDirect = (row: GroupRow) => {
@@ -330,30 +361,43 @@ export default function BrowserApp() {
         <Box component="main" sx={{ p: { xs: 1.5, md: 2.5 }, display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(0,1fr) 390px' }, gap: 2, height: { lg: 'calc(100vh - 86px)' }, minHeight: 0 }}>
           <Paper variant="outlined" sx={{ minHeight: { xs: 560, lg: 0 }, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <Box sx={{ px: 1.5, py: 1, borderBottom: 1, borderColor: 'divider' }}>
-              <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} sx={{ justifyContent: 'space-between', alignItems: { md: 'center' } }}>
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} sx={{ justifyContent: 'space-between', alignItems: { md: 'flex-end' } }}>
                 <Box>
                   <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Canonical groups</Typography>
                   <Typography variant="caption" color="text.secondary">Order: r, then k, m, n, a, b, c. Scroll to generate more.</Typography>
-                </Box>
-                <Stack direction="row" useFlexGap sx={{ flexWrap: 'wrap', gap: 0.75, alignItems: 'center', justifyContent: { md: 'flex-end' } }}>
-                  <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
-                    <Button variant="outlined" size="small" aria-label="Previous dimension" disabled={dimension <= 3} onClick={() => stepDimension(-1)} sx={{ minWidth: 34, px: 1 }}>−</Button>
+                  <Stack direction="row" spacing={0.75} sx={{ mt: 1, alignItems: 'center' }}>
                     <TextField
                       label="d"
+                      type="number"
                       value={dimensionText}
-                      onChange={(event) => setDimensionText(event.target.value.replace(/\D/g, ''))}
+                      onChange={(event) => updateDimension(event.target.value)}
                       onBlur={applyDimension}
                       onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
                       size="small"
-                      sx={{ width: 88 }}
-                      slotProps={{ htmlInput: { inputMode: 'numeric', 'aria-label': 'Dimension d' } }}
+                      sx={{ width: 92 }}
+                      slotProps={{ htmlInput: { min: 3, step: 1, 'aria-label': 'Dimension d' } }}
                     />
-                    <Button variant="outlined" size="small" aria-label="Next dimension" onClick={() => stepDimension(1)} sx={{ minWidth: 34, px: 1 }}>+</Button>
+                    <TextField
+                      label="r"
+                      type="number"
+                      value={modulusText}
+                      placeholder="all"
+                      onChange={(event) => updateModulus(event.target.value)}
+                      onBlur={applyModulus}
+                      onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+                      size="small"
+                      sx={{ width: 112 }}
+                      slotProps={{ htmlInput: { min: 2, step: 1, 'aria-label': 'Modulus r; leave blank for all moduli' } }}
+                    />
                   </Stack>
+                </Box>
+                <Stack direction="row" useFlexGap sx={{ flexWrap: 'wrap', gap: 0.5, alignItems: 'center', justifyContent: { md: 'flex-end' } }}>
                   <Chip size="small" label={`${rows.length.toLocaleString()} loaded`} />
-                  <Chip size="small" variant="outlined" label={exactR === undefined ? (status.lastCompletedR ? `through r=${status.lastCompletedR}` : 'starting r=2') : `r=${exactR}`} />
+                  {exactR === undefined ? <Chip size="small" variant="outlined" label={status.lastCompletedR ? `through r=${status.lastCompletedR}` : 'starting r=2'} /> : null}
+                  {exactR !== undefined && status.exactDone ? <Chip size="small" variant="outlined" label="r complete" /> : null}
                   {status.computing ? <Chip size="small" color="primary" label="generating…" /> : null}
                   {status.cacheHits ? <Chip size="small" variant="outlined" label={`${status.cacheHits} cached`} /> : null}
+                  {status.lastDurationMs !== null && status.lastDurationMs > 250 ? <Chip size="small" variant="outlined" label={`${(status.lastDurationMs / 1000).toFixed(2)} s batch`} /> : null}
                 </Stack>
               </Stack>
             </Box>
@@ -362,15 +406,6 @@ export default function BrowserApp() {
           </Paper>
 
           <Stack spacing={1.5} sx={{ minHeight: 0, overflowY: { lg: 'auto' } }}>
-            <Card variant="outlined"><CardContent><Stack spacing={1.25}>
-              <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Modulus</Typography>
-              <Stack direction="row" spacing={0.75} sx={{ alignItems: 'flex-start' }}>
-                <TextField label="Modulus r (optional)" value={modulusText} placeholder="All moduli" onChange={(event) => setModulusText(event.target.value.replace(/\D/g, ''))} onBlur={applyModulus} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} size="small" fullWidth />
-                {exactR === undefined ? null : <Button variant="outlined" onClick={() => { setExactR(undefined); setModulusText(''); setSelected(null); }}>All</Button>}
-              </Stack>
-              {status.lastDurationMs !== null && status.lastDurationMs > 250 ? <Typography variant="caption" color="text.secondary">Last uncached batch: {(status.lastDurationMs / 1000).toFixed(2)} s</Typography> : null}
-            </Stack></CardContent></Card>
-
             <Card variant="outlined"><CardContent>
               <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Selected group</Typography>
               {selected ? <Stack spacing={1} sx={{ mt: 1 }}>
