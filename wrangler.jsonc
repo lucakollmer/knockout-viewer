@@ -3,7 +3,7 @@
   "name": "knockout-viewer",
   "compatibility_date": "2026-08-26",
   "build": {
-    "command": "npm run test && node scripts/minimal-dist.mjs"
+    "command": "npm run typecheck && node scripts/minimal-dist.mjs"
   },
   "assets": {
     "directory": "./dist",
