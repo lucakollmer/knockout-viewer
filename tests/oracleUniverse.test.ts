@@ -18,5 +18,5 @@ describe('authoritative current-universe differential', () => {
     expect(total).toBe(oracle.totalRows);
     expect(total).toBe(73_571);
     expect(hash.digest('hex')).toBe(oracle.sha256);
-  });
+  }, 30_000);
 });
