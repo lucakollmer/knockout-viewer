@@ -38,8 +38,7 @@ function useGroupNavigator(d: number, exactR?: number) {
 
   useEffect(() => {
     workerRef.current?.terminate();
-    runIdRef.current += 1;
-    const runId = runIdRef.current;
+    const runId = ++runIdRef.current;
     rowCountRef.current = 0;
     setRows([]);
     setStatus({ computing: true, lastCompletedR: null, cacheHits: 0, lastDurationMs: null, error: null, exactDone: false });
@@ -124,11 +123,9 @@ function DirectSelector({ onOpen }: { onOpen: (row: GroupRow) => void }) {
     setValues((previous) => ({ ...previous, [field]: value.replace(/[^0-9-]/g, '') }));
   };
 
-  const inferredText = Object.entries(resolution.inferred)
-    .map(([field, value]) => `${field}=${value}`)
-    .join(', ');
+  const inferredText = Object.entries(resolution.inferred).map(([field, value]) => `${field}=${value}`).join(', ');
 
-  const fields = (names: DirectField[]) => (
+  const fieldRow = (names: DirectField[]) => (
     <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 0.75 }}>
       {names.map((field) => (
         <TextField
@@ -137,9 +134,7 @@ function DirectSelector({ onOpen }: { onOpen: (row: GroupRow) => void }) {
           value={values[field]}
           placeholder={resolution.inferred[field] === undefined ? '—' : `auto ${resolution.inferred[field]}`}
           onChange={(event) => setField(field, event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && canonical) onOpen(canonical);
-          }}
+          onKeyDown={(event) => { if (event.key === 'Enter' && canonical) onOpen(canonical); }}
           size="small"
           fullWidth
         />
@@ -152,23 +147,18 @@ function DirectSelector({ onOpen }: { onOpen: (row: GroupRow) => void }) {
       <CardContent>
         <Stack spacing={1.25}>
           <Box>
-            <Typography variant="subtitle1" fontWeight={700}>Direct selection</Typography>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Direct selection</Typography>
             <Typography variant="caption" color="text.secondary">Enter three values in either row and leave the inferable fourth blank.</Typography>
           </Box>
-          {fields(['d', 'n', 'm', 'k'])}
-          {fields(['r', 'a', 'b', 'c'])}
+          {fieldRow(['d', 'n', 'm', 'k'])}
+          {fieldRow(['r', 'a', 'b', 'c'])}
           {inferredText ? <Typography variant="caption" sx={{ color: 'primary.main' }}>Inferred: {inferredText}</Typography> : null}
           {resolution.choice ? (
             <Box>
               <Typography variant="caption" color="text.secondary">{resolution.choice.reason}</Typography>
-              <Stack direction="row" useFlexGap flexWrap="wrap" gap={0.5} sx={{ mt: 0.5 }}>
+              <Stack direction="row" useFlexGap sx={{ flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
                 {resolution.choice.values.slice(0, 18).map((value) => (
-                  <Chip
-                    key={value}
-                    size="small"
-                    label={`${resolution.choice?.field}=${value}`}
-                    onClick={() => setField(resolution.choice!.field, String(value))}
-                  />
+                  <Chip key={value} size="small" label={`${resolution.choice?.field}=${value}`} onClick={() => setField(resolution.choice!.field, String(value))} />
                 ))}
               </Stack>
             </Box>
@@ -194,12 +184,7 @@ function DirectSelector({ onOpen }: { onOpen: (row: GroupRow) => void }) {
 const ROW_HEIGHT = 42;
 const OVERSCAN = 10;
 
-function VirtualTable({
-  rows,
-  selected,
-  onSelect,
-  onNeedMore,
-}: {
+function VirtualTable({ rows, selected, onSelect, onNeedMore }: {
   rows: GroupRow[];
   selected: GroupRow | null;
   onSelect: (row: GroupRow) => void;
@@ -244,9 +229,9 @@ function VirtualTable({
   return (
     <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <Box sx={{ display: 'grid', gridTemplateColumns: columns, gap: 0.5, px: 1.25, py: 0.8, bgcolor: 'action.hover', borderBottom: 1, borderColor: 'divider' }}>
-        <Typography variant="caption" fontWeight={700}>Group</Typography>
+        <Typography variant="caption" sx={{ fontWeight: 700 }}>Group</Typography>
         {['d', 'r', 'n', 'm', 'k', 'a', 'b', 'c'].map((name, index) => (
-          <Typography key={name} variant="caption" fontWeight={700} sx={{ textAlign: 'right', display: index === 1 ? 'block' : { xs: 'none', md: 'block' } }}>{name}</Typography>
+          <Typography key={name} variant="caption" sx={{ fontWeight: 700, textAlign: 'right', display: index === 1 ? 'block' : { xs: 'none', md: 'block' } }}>{name}</Typography>
         ))}
       </Box>
       <Box
@@ -267,36 +252,17 @@ function VirtualTable({
                 key={row.id}
                 tabIndex={0}
                 onClick={() => onSelect(row)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') onSelect(row);
-                }}
+                onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onSelect(row); }}
                 sx={{
-                  position: 'absolute',
-                  top: index * ROW_HEIGHT,
-                  left: 0,
-                  right: 0,
-                  height: ROW_HEIGHT,
-                  display: 'grid',
-                  gridTemplateColumns: columns,
-                  gap: 0.5,
-                  alignItems: 'center',
-                  px: 1.25,
-                  borderBottom: 1,
-                  borderColor: 'divider',
-                  bgcolor: active ? 'action.selected' : 'background.paper',
-                  cursor: 'pointer',
-                  '&:hover': { bgcolor: active ? 'action.selected' : 'action.hover' },
+                  position: 'absolute', top: index * ROW_HEIGHT, left: 0, right: 0, height: ROW_HEIGHT,
+                  display: 'grid', gridTemplateColumns: columns, gap: 0.5, alignItems: 'center', px: 1.25,
+                  borderBottom: 1, borderColor: 'divider', bgcolor: active ? 'action.selected' : 'background.paper',
+                  cursor: 'pointer', '&:hover': { bgcolor: active ? 'action.selected' : 'action.hover' },
                 }}
               >
                 <Box sx={{ minWidth: 0, overflow: 'hidden' }}><GroupNotation row={row} /></Box>
-                {numberCell(row.d)}
-                {numberCell(row.r, true)}
-                {numberCell(row.n)}
-                {numberCell(row.m)}
-                {numberCell(row.k)}
-                {numberCell(row.a)}
-                {numberCell(row.b)}
-                {numberCell(row.c)}
+                {numberCell(row.d)}{numberCell(row.r, true)}{numberCell(row.n)}{numberCell(row.m)}
+                {numberCell(row.k)}{numberCell(row.a)}{numberCell(row.b)}{numberCell(row.c)}
               </Box>
             );
           })}
@@ -316,44 +282,28 @@ export default function BrowserApp() {
 
   const applyDimension = () => {
     const parsed = Number(dimensionText);
-    if (!Number.isSafeInteger(parsed) || parsed < 3) {
-      setDimensionText(String(dimension));
-      return;
-    }
-    setDimension(parsed);
-    setDimensionText(String(parsed));
+    if (!Number.isSafeInteger(parsed) || parsed < 3) { setDimensionText(String(dimension)); return; }
+    setDimension(parsed); setDimensionText(String(parsed));
     if (selected?.d !== parsed) setSelected(null);
   };
 
   const applyModulus = () => {
-    if (!modulusText.trim()) {
-      setExactR(undefined);
-      return;
-    }
+    if (!modulusText.trim()) { setExactR(undefined); return; }
     const parsed = Number(modulusText);
-    if (!Number.isSafeInteger(parsed) || parsed < 2) {
-      setModulusText(exactR === undefined ? '' : String(exactR));
-      return;
-    }
-    setExactR(parsed);
-    setModulusText(String(parsed));
+    if (!Number.isSafeInteger(parsed) || parsed < 2) { setModulusText(exactR === undefined ? '' : String(exactR)); return; }
+    setExactR(parsed); setModulusText(String(parsed));
     if (selected?.d !== dimension || selected.r !== parsed) setSelected(null);
   };
 
   const openDirect = (row: GroupRow) => {
-    setDimension(row.d);
-    setDimensionText(String(row.d));
-    setExactR(row.r);
-    setModulusText(String(row.r));
-    setSelected(row);
+    setDimension(row.d); setDimensionText(String(row.d)); setExactR(row.r); setModulusText(String(row.r)); setSelected(row);
   };
 
   const selectedIndex = selected ? rows.findIndex((row) => row.id === selected.id) : -1;
   const selectOffset = (delta: number) => {
-    if (rows.length === 0) return;
+    if (!rows.length) return;
     const base = selectedIndex < 0 ? 0 : selectedIndex;
-    const index = Math.max(0, Math.min(rows.length - 1, base + delta));
-    setSelected(rows[index]);
+    setSelected(rows[Math.max(0, Math.min(rows.length - 1, base + delta))]);
   };
 
   return (
@@ -361,18 +311,18 @@ export default function BrowserApp() {
       <CssBaseline />
       <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
         <Box component="header" sx={{ px: { xs: 2, md: 3 }, py: 2, borderBottom: 1, borderColor: 'divider' }}>
-          <Typography variant="h5" fontWeight={800}>Knockout group browser</Typography>
+          <Typography variant="h5" sx={{ fontWeight: 800 }}>Knockout group browser</Typography>
           <Typography variant="body2" color="text.secondary">Canonical effective cyclic SL three-block presentations, generated locally as you navigate.</Typography>
         </Box>
         <Box component="main" sx={{ p: { xs: 1.5, md: 2.5 }, display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(0,1fr) 390px' }, gap: 2, height: { lg: 'calc(100vh - 86px)' }, minHeight: 0 }}>
           <Paper variant="outlined" sx={{ minHeight: { xs: 560, lg: 0 }, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <Box sx={{ px: 1.5, py: 1, borderBottom: 1, borderColor: 'divider' }}>
-              <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" spacing={1}>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ justifyContent: 'space-between' }}>
                 <Box>
-                  <Typography variant="subtitle1" fontWeight={700}>Canonical groups</Typography>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Canonical groups</Typography>
                   <Typography variant="caption" color="text.secondary">Order: r, then k, m, n, a, b, c. Scroll to generate more.</Typography>
                 </Box>
-                <Stack direction="row" useFlexGap flexWrap="wrap" gap={0.5}>
+                <Stack direction="row" useFlexGap sx={{ flexWrap: 'wrap', gap: 0.5 }}>
                   <Chip size="small" label={`${rows.length.toLocaleString()} loaded`} />
                   <Chip size="small" variant="outlined" label={exactR === undefined ? (status.lastCompletedR ? `through r=${status.lastCompletedR}` : 'starting r=2') : `r=${exactR}`} />
                   {status.computing ? <Chip size="small" color="primary" label="generating…" /> : null}
@@ -385,45 +335,31 @@ export default function BrowserApp() {
           </Paper>
 
           <Stack spacing={1.5} sx={{ minHeight: 0, overflowY: { lg: 'auto' } }}>
-            <Card variant="outlined">
-              <CardContent>
-                <Stack spacing={1.25}>
-                  <Typography variant="subtitle1" fontWeight={700}>Browse</Typography>
-                  <Stack direction="row" spacing={0.75}>
-                    <Button variant="outlined" disabled={dimension <= 3} onClick={() => {
-                      const next = Math.max(3, dimension - 1);
-                      setDimension(next); setDimensionText(String(next)); setSelected(null);
-                    }}>−</Button>
-                    <TextField label="Dimension d" value={dimensionText} onChange={(event) => setDimensionText(event.target.value.replace(/\D/g, ''))} onBlur={applyDimension} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} size="small" fullWidth />
-                    <Button variant="outlined" onClick={() => {
-                      const next = dimension + 1;
-                      setDimension(next); setDimensionText(String(next)); setSelected(null);
-                    }}>+</Button>
-                  </Stack>
-                  <Stack direction="row" spacing={0.75} alignItems="flex-start">
-                    <TextField label="Modulus r (optional)" value={modulusText} placeholder="All moduli" onChange={(event) => setModulusText(event.target.value.replace(/\D/g, ''))} onBlur={applyModulus} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} size="small" fullWidth />
-                    {exactR === undefined ? null : <Button variant="outlined" onClick={() => { setExactR(undefined); setModulusText(''); setSelected(null); }}>All</Button>}
-                  </Stack>
-                  {status.lastDurationMs !== null && status.lastDurationMs > 250 ? <Typography variant="caption" color="text.secondary">Last uncached batch: {(status.lastDurationMs / 1000).toFixed(2)} s</Typography> : null}
-                </Stack>
-              </CardContent>
-            </Card>
+            <Card variant="outlined"><CardContent><Stack spacing={1.25}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Browse</Typography>
+              <Stack direction="row" spacing={0.75}>
+                <Button variant="outlined" disabled={dimension <= 3} onClick={() => { const next = Math.max(3, dimension - 1); setDimension(next); setDimensionText(String(next)); setSelected(null); }}>−</Button>
+                <TextField label="Dimension d" value={dimensionText} onChange={(event) => setDimensionText(event.target.value.replace(/\D/g, ''))} onBlur={applyDimension} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} size="small" fullWidth />
+                <Button variant="outlined" onClick={() => { const next = dimension + 1; setDimension(next); setDimensionText(String(next)); setSelected(null); }}>+</Button>
+              </Stack>
+              <Stack direction="row" spacing={0.75} sx={{ alignItems: 'flex-start' }}>
+                <TextField label="Modulus r (optional)" value={modulusText} placeholder="All moduli" onChange={(event) => setModulusText(event.target.value.replace(/\D/g, ''))} onBlur={applyModulus} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} size="small" fullWidth />
+                {exactR === undefined ? null : <Button variant="outlined" onClick={() => { setExactR(undefined); setModulusText(''); setSelected(null); }}>All</Button>}
+              </Stack>
+              {status.lastDurationMs !== null && status.lastDurationMs > 250 ? <Typography variant="caption" color="text.secondary">Last uncached batch: {(status.lastDurationMs / 1000).toFixed(2)} s</Typography> : null}
+            </Stack></CardContent></Card>
 
-            <Card variant="outlined">
-              <CardContent>
-                <Typography variant="subtitle1" fontWeight={700}>Selected group</Typography>
-                {selected ? (
-                  <Stack spacing={1} sx={{ mt: 1 }}>
-                    <Paper variant="outlined" sx={{ p: 1.2, bgcolor: 'action.hover' }}><GroupNotation row={selected} /></Paper>
-                    <Typography variant="caption" color="text.secondary">d={selected.d}, r={selected.r}; n,m,k=({selected.n},{selected.m},{selected.k}); a,b,c=({selected.a},{selected.b},{selected.c})</Typography>
-                    <Stack direction="row" spacing={1}>
-                      <Button variant="outlined" disabled={selectedIndex <= 0} onClick={() => selectOffset(-1)} fullWidth>Previous</Button>
-                      <Button variant="outlined" disabled={selectedIndex < 0 || selectedIndex >= rows.length - 1} onClick={() => selectOffset(1)} fullWidth>Next</Button>
-                    </Stack>
-                  </Stack>
-                ) : <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>Click a row or use direct selection.</Typography>}
-              </CardContent>
-            </Card>
+            <Card variant="outlined"><CardContent>
+              <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Selected group</Typography>
+              {selected ? <Stack spacing={1} sx={{ mt: 1 }}>
+                <Paper variant="outlined" sx={{ p: 1.2, bgcolor: 'action.hover' }}><GroupNotation row={selected} /></Paper>
+                <Typography variant="caption" color="text.secondary">d={selected.d}, r={selected.r}; n,m,k=({selected.n},{selected.m},{selected.k}); a,b,c=({selected.a},{selected.b},{selected.c})</Typography>
+                <Stack direction="row" spacing={1}>
+                  <Button variant="outlined" disabled={selectedIndex <= 0} onClick={() => selectOffset(-1)} fullWidth>Previous</Button>
+                  <Button variant="outlined" disabled={selectedIndex < 0 || selectedIndex >= rows.length - 1} onClick={() => selectOffset(1)} fullWidth>Next</Button>
+                </Stack>
+              </Stack> : <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>Click a row or use direct selection.</Typography>}
+            </CardContent></Card>
 
             <DirectSelector onOpen={openDirect} />
             <Typography variant="caption" color="text.secondary" sx={{ px: 0.5, pb: 1 }}>Enumeration runs entirely in your browser. Generated (d,r) batches are cached locally.</Typography>
