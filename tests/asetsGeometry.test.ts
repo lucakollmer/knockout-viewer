@@ -21,14 +21,16 @@ function computeCached(r: number, residues: Point): FamilyResult {
   };
 }
 
+const EXACT_CASES: ReadonlyArray<readonly [number, Point]> = [
+  [4, [1, 2, 3]],
+  [9, [0, 1, 8]],
+  [14, [1, 9, 11]],
+  [50, [1, 13, 37]],
+  [50, [1, 24, 49]],
+];
+
 describe('family-local cached exact geometry', () => {
-  it.each([
-    [4, [1, 2, 3] as Point],
-    [9, [0, 1, 8] as Point],
-    [14, [1, 9, 11] as Point],
-    [50, [1, 13, 37] as Point],
-    [50, [1, 24, 49] as Point],
-  ])('matches the frozen geometry for r=%i residues=%j', (r, residues) => {
+  it.each(EXACT_CASES)('matches the frozen geometry for r=%i residues=%j', (r, residues) => {
     expect(computeCached(r, residues)).toEqual(computeFamily(r, residues));
   });
 
