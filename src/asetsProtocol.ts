@@ -61,6 +61,8 @@ export type AsetsComputeRequest = {
   r: number;
   residues: Point;
   groupId?: string;
+  /** Visual consumers request exact records; header-only consumers can omit this. */
+  includeRecords?: boolean;
 };
 
 export type AsetsCancelRequest = {

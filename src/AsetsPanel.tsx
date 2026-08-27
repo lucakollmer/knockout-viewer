@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -8,6 +8,9 @@ import Chip from '@mui/material/Chip';
 import LinearProgress from '@mui/material/LinearProgress';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
+import AsetsLegacyViewer from './AsetsLegacyViewer';
+import { makeLegacyViewerData } from './asetsLegacyAdapter';
+import type { DownsetRecord, FamilyTransformCertificate } from './asetsCore';
 import type { GroupRow } from './groupMath';
 import type {
   AsetsFamilyHeader,
@@ -25,6 +28,8 @@ type PanelState = {
   header: AsetsFamilyHeader | null;
   cached: boolean;
   error: string | null;
+  records: readonly DownsetRecord[];
+  certificate: FamilyTransformCertificate | null;
 };
 
 const EMPTY_STATE: PanelState = {
@@ -34,6 +39,8 @@ const EMPTY_STATE: PanelState = {
   header: null,
   cached: false,
   error: null,
+  records: [],
+  certificate: null,
 };
 
 function phaseLabel(phase: PanelPhase): string {
@@ -67,6 +74,7 @@ function useAsetsFamily(selected: GroupRow | null) {
           ...previous,
           phase: message.phase,
           familyKey: message.familyKey,
+          certificate: message.certificate,
           emittedRecords: message.emittedRecords,
           error: null,
         }));
@@ -74,19 +82,22 @@ function useAsetsFamily(selected: GroupRow | null) {
         setState((previous) => ({
           ...previous,
           familyKey: message.familyKey,
-          emittedRecords: previous.emittedRecords + message.records.length,
+          records: [...previous.records, ...message.records],
+          emittedRecords: previous.records.length + message.records.length,
           cached: message.cached,
         }));
       } else if (message.type === 'complete') {
         busyRef.current = false;
-        setState({
+        setState((previous) => ({
+          ...previous,
           phase: 'complete',
           familyKey: message.familyKey,
+          certificate: message.certificate,
           emittedRecords: message.header.downsetTotal,
           header: message.header,
           cached: message.cached,
           error: null,
-        });
+        }));
       } else if (message.type === 'cancelled') {
         busyRef.current = false;
         setState((previous) => ({ ...previous, phase: 'cancelled' }));
@@ -127,16 +138,12 @@ function useAsetsFamily(selected: GroupRow | null) {
     let worker = workerRef.current ?? createWorker();
     const requestId = ++requestIdRef.current;
     if (!selected) {
-      // A running family is obsolete. Termination is immediate and does not
-      // depend on the CPU worker yielding to its message queue.
       if (busyRef.current) worker = replaceWorker();
       busyRef.current = false;
       setState(EMPTY_STATE);
       return;
     }
 
-    // Normal completed clicks reuse the worker (and its small modulus-context
-    // LRU). Only overlapping navigation replaces an actively computing worker.
     if (busyRef.current) worker = replaceWorker();
     busyRef.current = true;
     setState({ ...EMPTY_STATE, phase: 'cache' });
@@ -146,14 +153,13 @@ function useAsetsFamily(selected: GroupRow | null) {
       r: selected.r,
       residues: [selected.a, selected.b, selected.c],
       groupId: selected.id,
+      includeRecords: true,
     };
     worker.postMessage(request);
   }, [selected, createWorker, replaceWorker]);
 
   const cancel = () => {
     if (!workerRef.current || !busyRef.current) return;
-    // Invalidate any already-queued message from the terminated worker and
-    // immediately prepare a fresh idle worker for the next group click.
     requestIdRef.current += 1;
     replaceWorker();
     setState((previous) => ({ ...previous, phase: 'cancelled' }));
@@ -168,55 +174,60 @@ export default function AsetsPanel({ selected }: { selected: GroupRow | null }) 
   const header = state.header;
   const performanceData = header?.performance;
   const family = state.familyKey ? `r=${state.familyKey[1]} · (${state.familyKey.slice(2).join(', ')})` : null;
+  const viewerData = useMemo(() => {
+    if (!selected || state.phase !== 'complete' || !header || !state.certificate) return null;
+    if (state.records.length !== header.downsetTotal) return null;
+    return makeLegacyViewerData(selected, state.records, state.certificate);
+  }, [selected, state.phase, state.records, state.certificate, header]);
 
   return (
-    <Card variant="outlined">
-      <CardContent>
-        <Stack spacing={1}>
-          <Stack direction="row" useFlexGap sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 0.75 }}>
-            <Box>
-              <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Asets</Typography>
-              <Typography variant="caption" color="text.secondary">Exact portable family engine · local worker/cache</Typography>
-            </Box>
-            {selected ? <Chip size="small" variant="outlined" label={phaseLabel(state.phase)} /> : null}
+    <Stack spacing={1.5}>
+      <Card variant="outlined">
+        <CardContent>
+          <Stack spacing={1}>
+            <Stack direction="row" useFlexGap sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 0.75 }}>
+              <Box>
+                <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Asets</Typography>
+                <Typography variant="caption" color="text.secondary">Exact browser generation · v0.3.10 visualizer · local cache</Typography>
+              </Box>
+              {selected ? <Chip size="small" variant="outlined" label={phaseLabel(state.phase)} /> : null}
+            </Stack>
+
+            {!selected ? (
+              <Typography variant="body2" color="text.secondary">Select a group to generate and inspect its Asets.</Typography>
+            ) : (
+              <>
+                {family ? <Typography variant="caption" color="text.secondary">Canonical family: {family}</Typography> : null}
+                {running ? <LinearProgress /> : null}
+                {state.error ? <Alert severity="error">{state.error}</Alert> : null}
+                {state.phase === 'cancelled' ? <Alert severity="info">Aset computation cancelled.</Alert> : null}
+
+                <Stack direction="row" useFlexGap sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+                  {state.cached ? <Chip size="small" color="success" label="cached" /> : null}
+                  {state.emittedRecords > 0 ? <Chip size="small" label={`${state.emittedRecords.toLocaleString()} records`} /> : null}
+                  {header ? <Chip size="small" variant="outlined" label={`${header.coherentTotal} coherent`} /> : null}
+                  {header?.noncoherentTotal ? <Chip size="small" variant="outlined" label={`${header.noncoherentTotal} noncoherent`} /> : null}
+                </Stack>
+
+                {performanceData && !state.cached ? (
+                  <Typography variant="caption" color="text.secondary">
+                    worker {performanceData.totalWorkerComputeMs.toFixed(1)} ms · context {performanceData.modulusContextSetupMs.toFixed(1)} ms · CSP {performanceData.candidateCspEnumerationMs.toFixed(1)} ms · geometry {performanceData.geometryMs.toFixed(1)} ms · IndexedDB write {performanceData.indexedDbWriteMs.toFixed(1)} ms
+                  </Typography>
+                ) : null}
+                {performanceData && state.cached ? (
+                  <Typography variant="caption" color="text.secondary">IndexedDB family read {performanceData.indexedDbReadMs.toFixed(1)} ms</Typography>
+                ) : null}
+
+                {state.phase === 'complete' && header && state.records.length !== header.downsetTotal ? (
+                  <Alert severity="warning">Aset records are still loading for visualization.</Alert>
+                ) : null}
+                {running ? <Button size="small" variant="outlined" onClick={cancel}>Cancel</Button> : null}
+              </>
+            )}
           </Stack>
-
-          {!selected ? (
-            <Typography variant="body2" color="text.secondary">Select a group to load or compute its canonical Aset family.</Typography>
-          ) : (
-            <>
-              {family ? <Typography variant="caption" color="text.secondary">Canonical family: {family}</Typography> : null}
-              {running ? <LinearProgress /> : null}
-              {state.error ? <Alert severity="error">{state.error}</Alert> : null}
-              {state.phase === 'cancelled' ? <Alert severity="info">Aset computation cancelled.</Alert> : null}
-
-              <Stack direction="row" useFlexGap sx={{ flexWrap: 'wrap', gap: 0.5 }}>
-                {state.cached ? <Chip size="small" color="success" label="cached" /> : null}
-                {state.emittedRecords > 0 ? <Chip size="small" label={`${state.emittedRecords.toLocaleString()} records`} /> : null}
-                {header ? <Chip size="small" variant="outlined" label={`${header.coherentTotal} coherent`} /> : null}
-                {header?.noncoherentTotal ? <Chip size="small" variant="outlined" label={`${header.noncoherentTotal} noncoherent`} /> : null}
-              </Stack>
-
-              {header?.normalizedResultDigest ? (
-                <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
-                  digest {header.normalizedResultDigest.slice(0, 16)}…
-                </Typography>
-              ) : null}
-
-              {performanceData && !state.cached ? (
-                <Typography variant="caption" color="text.secondary">
-                  worker {performanceData.totalWorkerComputeMs.toFixed(0)} ms · context {performanceData.modulusContextSetupMs.toFixed(0)} ms · CSP {performanceData.candidateCspEnumerationMs.toFixed(0)} ms · geometry {performanceData.geometryMs.toFixed(0)} ms
-                </Typography>
-              ) : null}
-              {performanceData && state.cached ? (
-                <Typography variant="caption" color="text.secondary">IndexedDB read {performanceData.indexedDbReadMs.toFixed(1)} ms</Typography>
-              ) : null}
-
-              {running ? <Button size="small" variant="outlined" onClick={cancel}>Cancel</Button> : null}
-            </>
-          )}
-        </Stack>
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+      {viewerData ? <AsetsLegacyViewer data={viewerData} /> : null}
+    </Stack>
   );
 }
