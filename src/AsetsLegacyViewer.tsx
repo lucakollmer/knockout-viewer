@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { LegacyViewerData } from './asetsLegacyAdapter';
 
+// Keep the embedded legacy visualizer isolated from the generated-data engine.
 const VIEWER_MESSAGE = 'knockout-asets-viewer-data';
 const READY_MESSAGE = 'knockout-asets-viewer-ready';
 
