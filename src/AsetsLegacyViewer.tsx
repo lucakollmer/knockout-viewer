@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import Box from '@mui/material/Box';
 import type { LegacyViewerData } from './asetsLegacyAdapter';
 
 const VIEWER_MESSAGE = 'knockout-asets-viewer-data';
@@ -27,18 +26,17 @@ export default function AsetsLegacyViewer({ data }: { data: LegacyViewerData }) 
   }, [data, ready]);
 
   return (
-    <Box
-      component="iframe"
+    <iframe
       ref={frameRef}
       title="Generated Asets viewer"
       src="/asets-viewer-v0.3.10-embedded.html"
-      sx={{
+      style={{
         display: 'block',
         width: '100%',
-        height: { xs: 1560, md: 1740 },
+        height: '1740px',
         border: 0,
-        bgcolor: 'background.paper',
-        borderRadius: 1.25,
+        background: 'transparent',
+        borderRadius: '10px',
       }}
     />
   );
