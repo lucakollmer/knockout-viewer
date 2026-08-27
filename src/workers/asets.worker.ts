@@ -10,12 +10,12 @@ import {
   effectiveFamily,
   familyCacheKey,
   familyDigest,
-  geometryRecord,
   iterDownsets,
   type DownsetRecord,
   type FamilyResult,
   type ModulusContext,
 } from '../asetsCore';
+import { createFamilyGeometryContext, geometryRecordCached } from '../asetsGeometry';
 import type {
   AsetsComputeRequest,
   AsetsFamilyChunk,
@@ -32,7 +32,8 @@ const CACHE_DB_VERSION = 1;
 const HEADER_STORE = 'asetFamilyHeaders';
 const CHUNK_STORE = 'asetFamilyChunks';
 const TRANSFORM_STORE = 'asetGroupTransforms';
-const CHUNK_SIZE = 16;
+const STREAM_CHUNK_SIZE = 16;
+const CACHE_CHUNK_SIZE = 64;
 
 let activeGeneration = 0;
 let activeRequestId = 0;
@@ -93,12 +94,47 @@ async function idbGet<T>(storeName: string, key: IDBValidKey): Promise<T | null>
   });
 }
 
+async function idbGetMany<T>(storeName: string, keys: readonly IDBValidKey[]): Promise<Array<T | null>> {
+  const db = await openCache();
+  if (!db) return keys.map(() => null);
+  return new Promise((resolve) => {
+    const tx = db.transaction(storeName, 'readonly');
+    const store = tx.objectStore(storeName);
+    const values: Array<T | null> = keys.map(() => null);
+    let failed = false;
+    keys.forEach((key, index) => {
+      const request = store.get(key);
+      request.onerror = () => { failed = true; };
+      request.onsuccess = () => { values[index] = (request.result as T | undefined) ?? null; };
+    });
+    tx.onerror = () => resolve(keys.map(() => null));
+    tx.oncomplete = () => resolve(failed ? keys.map(() => null) : values);
+  });
+}
+
 async function idbPut(storeName: string, key: IDBValidKey, value: unknown): Promise<void> {
   const db = await openCache();
   if (!db) return;
   await new Promise<void>((resolve) => {
     const tx = db.transaction(storeName, 'readwrite');
     tx.objectStore(storeName).put(value, key);
+    tx.onerror = () => resolve();
+    tx.oncomplete = () => resolve();
+  });
+}
+
+async function idbPutFamilyProgress(
+  key: AsetsFamilyKey,
+  chunkIndex: number,
+  chunk: AsetsFamilyChunk,
+  header: AsetsFamilyHeader,
+): Promise<void> {
+  const db = await openCache();
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    const tx = db.transaction([CHUNK_STORE, HEADER_STORE], 'readwrite');
+    tx.objectStore(CHUNK_STORE).put(chunk, chunkKeyArray(key, chunkIndex));
+    tx.objectStore(HEADER_STORE).put(header, familyKeyArray(key));
     tx.onerror = () => resolve();
     tx.oncomplete = () => resolve();
   });
@@ -164,7 +200,7 @@ async function readCompleteFamily(
 ): Promise<boolean> {
   const started = performance.now();
   const header = await idbGet<AsetsFamilyHeader>(HEADER_STORE, familyKeyArray(key));
-  const readHeaderMs = performance.now() - started;
+  let readMs = performance.now() - started;
   assertActive(token);
   if (
     !header
@@ -175,13 +211,15 @@ async function readCompleteFamily(
   ) return false;
 
   post({ type: 'status', requestId: request.requestId, phase: 'cache', familyKey: key, certificate, emittedRecords: 0 });
+  const chunkKeys = Array.from({ length: header.chunkCount }, (_, index) => chunkKeyArray(key, index));
+  const chunksStarted = performance.now();
+  const chunks = await idbGetMany<AsetsFamilyChunk>(CHUNK_STORE, chunkKeys);
+  readMs += performance.now() - chunksStarted;
+  assertActive(token);
+
   let emitted = 0;
-  let readMs = readHeaderMs;
-  for (let chunkIndex = 0; chunkIndex < header.chunkCount; chunkIndex += 1) {
-    const chunkStart = performance.now();
-    const chunk = await idbGet<AsetsFamilyChunk>(CHUNK_STORE, chunkKeyArray(key, chunkIndex));
-    readMs += performance.now() - chunkStart;
-    assertActive(token);
+  for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+    const chunk = chunks[chunkIndex];
     if (!chunk || chunk.schemaVersion !== ASETS_SCHEMA_VERSION || chunk.engineVersion !== ASETS_ENGINE_VERSION) return false;
     emitted += chunk.records.length;
     post({ type: 'chunk', requestId: request.requestId, familyKey: key, chunkIndex, records: chunk.records, cached: true });
@@ -236,6 +274,7 @@ async function computeAndCache(request: AsetsComputeRequest, token: number): Pro
   }
   assertActive(token);
 
+  const geometryContext = createFamilyGeometryContext(normalized.r, normalized.residues);
   let header = makeHeader(key, normalized.r, normalized.residues, 'computing');
   const headerWriteStarted = performance.now();
   await idbPut(HEADER_STORE, familyKeyArray(key), header);
@@ -250,43 +289,52 @@ async function computeAndCache(request: AsetsComputeRequest, token: number): Pro
     metrics,
   });
   const allRecords: DownsetRecord[] = [];
-  let chunk: DownsetRecord[] = [];
-  let chunkIndex = 0;
+  let streamChunk: DownsetRecord[] = [];
+  let streamChunkIndex = 0;
+  let cacheChunk: DownsetRecord[] = [];
+  let cacheChunkIndex = 0;
   let coherentTotal = 0;
 
-  const flushChunk = async (): Promise<void> => {
-    if (chunk.length === 0) return;
+  const flushStreamChunk = async (): Promise<void> => {
+    if (streamChunk.length === 0) return;
     assertActive(token);
-    const storedChunk: AsetsFamilyChunk = {
-      schemaVersion: ASETS_SCHEMA_VERSION,
-      engineVersion: ASETS_ENGINE_VERSION,
-      familyKey: key,
-      chunkIndex,
-      records: chunk,
-    };
-    const writeStarted = performance.now();
-    await idbPut(CHUNK_STORE, chunkKeyArray(key, chunkIndex), storedChunk);
-    performanceData.indexedDbWriteMs += performance.now() - writeStarted;
-    assertActive(token);
+    const outgoing = streamChunk;
+    streamChunk = [];
     const serializationStarted = performance.now();
-    post({ type: 'chunk', requestId: request.requestId, familyKey: key, chunkIndex, records: chunk, cached: false });
+    post({ type: 'chunk', requestId: request.requestId, familyKey: key, chunkIndex: streamChunkIndex, records: outgoing, cached: false });
     performanceData.serializationChunkingMs += performance.now() - serializationStarted;
-    chunkIndex += 1;
-    header = {
-      ...header,
-      downsetTotal: allRecords.length,
-      coherentTotal,
-      noncoherentTotal: allRecords.length - coherentTotal,
-      chunkCount: chunkIndex,
-    };
-    const progressWriteStarted = performance.now();
-    await idbPut(HEADER_STORE, familyKeyArray(key), header);
-    performanceData.indexedDbWriteMs += performance.now() - progressWriteStarted;
-    chunk = [];
+    streamChunkIndex += 1;
     updatePeakHeap(performanceData);
     await yieldToWorkerEvents();
     assertActive(token);
     post({ type: 'status', requestId: request.requestId, phase: 'compute', familyKey: key, certificate: normalized.certificate, emittedRecords: allRecords.length });
+  };
+
+  const flushCacheChunk = async (): Promise<void> => {
+    if (cacheChunk.length === 0) return;
+    assertActive(token);
+    const storedRecords = cacheChunk;
+    cacheChunk = [];
+    const storedChunk: AsetsFamilyChunk = {
+      schemaVersion: ASETS_SCHEMA_VERSION,
+      engineVersion: ASETS_ENGINE_VERSION,
+      familyKey: key,
+      chunkIndex: cacheChunkIndex,
+      records: storedRecords,
+    };
+    const nextHeader: AsetsFamilyHeader = {
+      ...header,
+      downsetTotal: allRecords.length,
+      coherentTotal,
+      noncoherentTotal: allRecords.length - coherentTotal,
+      chunkCount: cacheChunkIndex + 1,
+    };
+    const writeStarted = performance.now();
+    await idbPutFamilyProgress(key, cacheChunkIndex, storedChunk, nextHeader);
+    performanceData.indexedDbWriteMs += performance.now() - writeStarted;
+    assertActive(token);
+    header = nextHeader;
+    cacheChunkIndex += 1;
   };
 
   while (true) {
@@ -296,15 +344,18 @@ async function computeAndCache(request: AsetsComputeRequest, token: number): Pro
     performanceData.candidateCspEnumerationMs += performance.now() - cspStarted;
     if (next.done) break;
     const geometryStarted = performance.now();
-    const record = geometryRecord(next.value, normalized.residues, normalized.r);
+    const record = geometryRecordCached(next.value, normalized.residues, normalized.r, geometryContext);
     performanceData.geometryMs += performance.now() - geometryStarted;
     allRecords.push(record);
-    chunk.push(record);
+    streamChunk.push(record);
+    cacheChunk.push(record);
     if (record.coherent) coherentTotal += 1;
     assertActive(token);
-    if (chunk.length >= CHUNK_SIZE) await flushChunk();
+    if (streamChunk.length >= STREAM_CHUNK_SIZE) await flushStreamChunk();
+    if (cacheChunk.length >= CACHE_CHUNK_SIZE) await flushCacheChunk();
   }
-  await flushChunk();
+  await flushStreamChunk();
+  await flushCacheChunk();
   assertActive(token);
 
   post({ type: 'status', requestId: request.requestId, phase: 'finalize', familyKey: key, certificate: normalized.certificate, emittedRecords: allRecords.length });
@@ -321,7 +372,7 @@ async function computeAndCache(request: AsetsComputeRequest, token: number): Pro
     downsetTotal: allRecords.length,
     coherentTotal,
     noncoherentTotal: allRecords.length - coherentTotal,
-    chunkCount: chunkIndex,
+    chunkCount: cacheChunkIndex,
     normalizedResultDigest: digest,
     completedAt: new Date().toISOString(),
     performance: performanceData,
