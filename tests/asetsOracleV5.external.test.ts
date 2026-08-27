@@ -4,12 +4,14 @@ import { DatabaseSync } from 'node:sqlite';
 import { inflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import {
-  buildModulusContext,
-  computeFamily,
+  compareDownsets,
   familyPayloadJson,
   stableStringify,
+  type FamilyResult,
   type Point,
 } from '../src/asetsCore';
+import { buildFastModulusContext, iterFastDownsets, type FastModulusContext } from '../src/asetsFast';
+import { createFamilyGeometryContext, geometryRecordCached } from '../src/asetsGeometry';
 
 const DATABASE_SHA256 = 'a662628f57add19c75b929552684df4cf7b5dfa96de226f47e3a712f82d0e76f';
 const databasePath = process.env.ASETS_V5_DB;
@@ -71,8 +73,19 @@ function normalizedOraclePayload(compressed: Uint8Array): string {
   return stableStringify({ r: Number(raw.r), residues: raw.residues.map(Number), records });
 }
 
-describe.skipIf(!databasePath)('authoritative generalized v5 Asets differential', () => {
-  it('matches all 12,709 canonical families exactly', { timeout: 30 * 60_000 }, () => {
+function computeOptimizedFamily(r: number, residues: Point, modulusContext: FastModulusContext): FamilyResult {
+  const streamed = [...iterFastDownsets(r, residues, { modulusContext })];
+  const ordered = streamed.slice().sort(compareDownsets);
+  const geometryContext = createFamilyGeometryContext(r, residues);
+  return {
+    r,
+    residues,
+    records: ordered.map((downset) => geometryRecordCached(downset, residues, r, geometryContext)),
+  };
+}
+
+describe.skipIf(!databasePath)('authoritative generalized v5 optimized Asets differential', () => {
+  it('matches all 12,709 canonical families exactly through the interactive fast path', { timeout: 30 * 60_000 }, () => {
     if (!databasePath) throw new Error('ASETS_V5_DB is required');
     expect(createHash('sha256').update(readFileSync(databasePath)).digest('hex')).toBe(DATABASE_SHA256);
 
@@ -82,7 +95,7 @@ describe.skipIf(!databasePath)('authoritative generalized v5 Asets differential'
     ).all() as Array<{ family_id: number; r: number; residues_json: string; payload: Uint8Array }>;
 
     let currentR = -1;
-    let context: ReturnType<typeof buildModulusContext> | undefined;
+    let context: FastModulusContext | undefined;
     let checked = 0;
     let downsets = 0;
     let noncoherent = 0;
@@ -90,12 +103,13 @@ describe.skipIf(!databasePath)('authoritative generalized v5 Asets differential'
     for (const row of rows) {
       const r = Number(row.r);
       if (r !== currentR) {
-        context = buildModulusContext(r);
+        context = buildFastModulusContext(r);
         currentR = r;
       }
+      if (!context) throw new Error('missing fast modulus context');
       const parsedResidues = JSON.parse(row.residues_json) as number[];
       const residues: Point = [Number(parsedResidues[0]), Number(parsedResidues[1]), Number(parsedResidues[2])];
-      const actual = computeFamily(r, residues, { modulusContext: context });
+      const actual = computeOptimizedFamily(r, residues, context);
       expect(familyPayloadJson(actual), `family ${row.family_id}, r=${r}, residues=${residues.join(',')}`).toBe(
         normalizedOraclePayload(row.payload),
       );
