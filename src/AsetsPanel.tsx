@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -53,9 +53,10 @@ function phaseLabel(phase: PanelPhase): string {
 function useAsetsFamily(selected: GroupRow | null) {
   const workerRef = useRef<Worker | null>(null);
   const requestIdRef = useRef(0);
+  const busyRef = useRef(false);
   const [state, setState] = useState<PanelState>(EMPTY_STATE);
 
-  useEffect(() => {
+  const createWorker = useCallback((): Worker => {
     const worker = new Worker(new URL('./workers/asets.worker.ts', import.meta.url), { type: 'module' });
     workerRef.current = worker;
     worker.onmessage = (event: MessageEvent<AsetsWorkerMessage>) => {
@@ -77,6 +78,7 @@ function useAsetsFamily(selected: GroupRow | null) {
           cached: message.cached,
         }));
       } else if (message.type === 'complete') {
+        busyRef.current = false;
         setState({
           phase: 'complete',
           familyKey: message.familyKey,
@@ -86,27 +88,57 @@ function useAsetsFamily(selected: GroupRow | null) {
           error: null,
         });
       } else if (message.type === 'cancelled') {
+        busyRef.current = false;
         setState((previous) => ({ ...previous, phase: 'cancelled' }));
       } else if (message.type === 'error') {
+        busyRef.current = false;
         setState((previous) => ({ ...previous, phase: 'error', error: message.message }));
       }
     };
-    return () => {
-      worker.terminate();
-      workerRef.current = null;
+    worker.onerror = (event) => {
+      if (workerRef.current !== worker) return;
+      busyRef.current = false;
+      setState((previous) => ({
+        ...previous,
+        phase: 'error',
+        error: event.message || 'Asets worker failed.',
+      }));
     };
+    return worker;
   }, []);
 
+  const replaceWorker = useCallback((): Worker => {
+    workerRef.current?.terminate();
+    workerRef.current = null;
+    busyRef.current = false;
+    return createWorker();
+  }, [createWorker]);
+
   useEffect(() => {
-    const worker = workerRef.current;
-    if (!worker) return;
+    createWorker();
+    return () => {
+      workerRef.current?.terminate();
+      workerRef.current = null;
+      busyRef.current = false;
+    };
+  }, [createWorker]);
+
+  useEffect(() => {
+    let worker = workerRef.current ?? createWorker();
     const requestId = ++requestIdRef.current;
     if (!selected) {
-      const cancel: AsetsWorkerRequest = { type: 'cancel' };
-      worker.postMessage(cancel);
+      // A running family is obsolete. Termination is immediate and does not
+      // depend on the CPU worker yielding to its message queue.
+      if (busyRef.current) worker = replaceWorker();
+      busyRef.current = false;
       setState(EMPTY_STATE);
       return;
     }
+
+    // Normal completed clicks reuse the worker (and its small modulus-context
+    // LRU). Only overlapping navigation replaces an actively computing worker.
+    if (busyRef.current) worker = replaceWorker();
+    busyRef.current = true;
     setState({ ...EMPTY_STATE, phase: 'cache' });
     const request: AsetsWorkerRequest = {
       type: 'compute',
@@ -116,14 +148,15 @@ function useAsetsFamily(selected: GroupRow | null) {
       groupId: selected.id,
     };
     worker.postMessage(request);
-  }, [selected]);
+  }, [selected, createWorker, replaceWorker]);
 
   const cancel = () => {
-    const worker = workerRef.current;
-    if (!worker || state.phase === 'idle' || state.phase === 'complete') return;
-    const request: AsetsWorkerRequest = { type: 'cancel', requestId: requestIdRef.current };
-    worker.postMessage(request);
-    setState((previous) => ({ ...previous, phase: 'cancelling' }));
+    if (!workerRef.current || !busyRef.current) return;
+    // Invalidate any already-queued message from the terminated worker and
+    // immediately prepare a fresh idle worker for the next group click.
+    requestIdRef.current += 1;
+    replaceWorker();
+    setState((previous) => ({ ...previous, phase: 'cancelled' }));
   };
 
   return { state, cancel };
