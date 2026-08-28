@@ -1,23 +1,16 @@
 import {
   CancelledError,
-  assertSupportedModulus,
   compareDownsets,
   type CancelCheck,
   type Point,
   type SearchMetrics,
 } from './asetsCore';
+import { assertExactRuntimeModulus } from './asetsRuntime';
 
-/**
- * Browser-oriented modulus context for the interactive Asets worker.
- *
- * The mathematical universe is identical to buildModulusContext(), but each
- * principal box stores compact point IDs instead of duplicating Point tuples.
- * A fresh browser can build this from r alone; no dataset payload is required.
- */
 export type FastModulusContext = {
   r: number;
   points: readonly Point[];
-  boxPointIds: readonly Uint16Array[];
+  boxPointIds: readonly Uint32Array[];
 };
 
 type FastCandidate = {
@@ -40,39 +33,41 @@ function comparePointByDegree(first: Point, second: Point): number {
   return firstDegree - secondDegree || comparePoint(first, second);
 }
 
+function coordinateKey(x: number, y: number, z: number, r: number): number {
+  return (x * r + y) * r + z;
+}
+
 export function buildFastModulusContext(r: number, cancelCheck?: CancelCheck): FastModulusContext {
-  assertSupportedModulus(r);
+  assertExactRuntimeModulus(r);
 
   const points: Point[] = [];
+  const pointIds = new Map<number, number>();
   for (let x = 0; x < r; x += 1) {
     for (let y = 0; y < r; y += 1) {
       const xy = (x + 1) * (y + 1);
       if (xy > r) break;
       const maxZ = Math.floor(r / xy) - 1;
-      for (let z = 0; z <= maxZ; z += 1) points.push([x, y, z]);
+      for (let z = 0; z <= maxZ; z += 1) {
+        const pointId = points.length;
+        points.push([x, y, z]);
+        pointIds.set(coordinateKey(x, y, z, r), pointId);
+      }
     }
   }
-  if (points.length >= 0xffff) throw new Error('fast modulus context exceeds Uint16 point-ID capacity');
 
-  // Temporary dense lookup only during construction. At r<=100 this is at
-  // most 1,000,000 Uint16 entries (~2 MB), then it becomes collectible.
-  const denseIds = new Uint16Array(r * r * r);
-  for (let pointId = 0; pointId < points.length; pointId += 1) {
-    const point = points[pointId];
-    denseIds[(point[0] * r + point[1]) * r + point[2]] = pointId + 1;
-  }
-
-  const boxPointIds: Uint16Array[] = new Array(points.length);
+  // Sparse coordinate lookup avoids the old O(r^3) temporary dense table.
+  // Uint32 IDs remove the former 65,535-point representation ceiling.
+  const boxPointIds: Uint32Array[] = new Array(points.length);
   for (let pointId = 0; pointId < points.length; pointId += 1) {
     const [x, y, z] = points[pointId];
-    const ids = new Uint16Array((x + 1) * (y + 1) * (z + 1));
+    const ids = new Uint32Array((x + 1) * (y + 1) * (z + 1));
     let index = 0;
     for (let i = 0; i <= x; i += 1) {
       for (let j = 0; j <= y; j += 1) {
         for (let k = 0; k <= z; k += 1) {
-          const encoded = denseIds[(i * r + j) * r + k];
-          if (encoded === 0) throw new Error('internal fast modulus point lookup failure');
-          ids[index] = encoded - 1;
+          const encoded = pointIds.get(coordinateKey(i, j, k, r));
+          if (encoded === undefined) throw new Error('internal fast modulus point lookup failure');
+          ids[index] = encoded;
           index += 1;
         }
       }
@@ -91,7 +86,7 @@ function familyCandidatesFast(
   metrics?: SearchMetrics,
 ): readonly (readonly FastCandidate[])[] {
   const { r, points, boxPointIds } = context;
-  const characters = new Uint16Array(points.length);
+  const characters = new Uint32Array(points.length);
   for (let pointId = 0; pointId < points.length; pointId += 1) {
     const point = points[pointId];
     characters[pointId] = (
@@ -102,13 +97,11 @@ function familyCandidatesFast(
   }
 
   const buckets: FastCandidate[][] = Array.from({ length: r }, () => []);
-  // Epoch marking avoids allocating/clearing a length-r seen array for every
-  // principal box. The current exact modulus cap keeps the epoch count tiny.
-  const seenEpoch = new Uint16Array(r);
+  const seenEpoch = new Uint32Array(r);
   let epoch = 1;
 
   for (let pointId = 0; pointId < points.length; pointId += 1) {
-    if (epoch === 0xffff) {
+    if (epoch === 0xffffffff) {
       seenEpoch.fill(0);
       epoch = 1;
     }
@@ -148,7 +141,6 @@ function familyCandidatesFast(
   return buckets;
 }
 
-/** Stream the exact frozen CSP downsets in the same deterministic emission order. */
 export function* iterFastDownsets(
   rInput: number,
   residuesInput: readonly number[],
@@ -158,7 +150,7 @@ export function* iterFastDownsets(
     metrics?: SearchMetrics;
   } = {},
 ): Generator<readonly Point[]> {
-  assertSupportedModulus(rInput);
+  assertExactRuntimeModulus(rInput);
   if (residuesInput.length !== 3) throw new Error('expected three residues');
   const r = rInput;
   const residues: Point = [
@@ -170,8 +162,7 @@ export function* iterFastDownsets(
   if (context.r !== r) throw new Error('fast modulus context does not match r');
 
   const candidates = familyCandidatesFast(context, residues, options.cancelCheck, options.metrics);
-  // Zero means unassigned; otherwise store pointId+1. Point 0 is (0,0,0).
-  const assigned = new Uint16Array(r);
+  const assigned = new Uint32Array(r);
   assigned[0] = 1;
   let assignedCount = 1;
 
@@ -281,6 +272,5 @@ export function enumerateFastDownsets(
     metrics?: SearchMetrics;
   } = {},
 ): readonly (readonly Point[])[] {
-  const result = [...iterFastDownsets(r, residues, options)].sort(compareDownsets);
-  return result;
+  return [...iterFastDownsets(r, residues, options)].sort(compareDownsets);
 }

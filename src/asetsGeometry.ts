@@ -1,4 +1,7 @@
-import { assertSupportedModulus, type DownsetRecord, type Point } from './asetsCore';
+import type { DownsetRecord, Point } from './asetsCore';
+import { assertExactRuntimeModulus } from './asetsRuntime';
+
+type PackedKey = number | string;
 
 /** Family-local exact geometry reuse for one clicked Aset family. */
 export type FamilyGeometryContext = {
@@ -8,30 +11,28 @@ export type FamilyGeometryContext = {
   rowBase: number;
   normalOffset: number;
   normalBase: number;
-  rowIds: Map<number, number>;
+  rowIds: Map<PackedKey, number>;
   rowPoints: Point[];
-  lineIds: Map<number, number>;
+  lineIds: Map<PackedKey, number>;
   linePoints: Point[];
-  pairLines: Map<number, number>;
+  pairLines: Map<PackedKey, number>;
   quotientScales: number[];
 };
 
 export function createFamilyGeometryContext(r: number, residues: Point): FamilyGeometryContext {
-  assertSupportedModulus(r);
+  assertExactRuntimeModulus(r);
   for (const residue of residues) {
     if (!Number.isSafeInteger(residue) || residue < 0 || residue >= r) {
       throw new Error('geometry residues must be normalized safe integers modulo r');
     }
   }
-  const normalBase = 4 * r * r + 3;
-  if (!Number.isSafeInteger(normalBase ** 3)) throw new Error('geometry packed-key bound exceeds Number safe integers');
   return {
     r,
     residues,
     rowOffset: r,
     rowBase: 2 * r + 1,
     normalOffset: 2 * r * r + 1,
-    normalBase,
+    normalBase: 4 * r * r + 3,
     rowIds: new Map(),
     rowPoints: [],
     lineIds: new Map(),
@@ -41,8 +42,12 @@ export function createFamilyGeometryContext(r: number, residues: Point): FamilyG
   };
 }
 
-function pack(point: Point, offset: number, base: number): number {
-  return ((point[0] + offset) * base + point[1] + offset) * base + point[2] + offset;
+function pack(point: Point, offset: number, base: number): PackedKey {
+  const first = point[0] + offset;
+  const second = point[1] + offset;
+  const third = point[2] + offset;
+  const packed = (first * base + second) * base + third;
+  return Number.isSafeInteger(packed) ? packed : `${point[0]},${point[1]},${point[2]}`;
 }
 
 function comparePoint(first: Point, second: Point): number {
@@ -68,7 +73,7 @@ function gcd4(first: number, second: number, third: number, fourth: number): num
   return gcd2(gcd3(first, second, third), fourth);
 }
 
-function rowKey(context: FamilyGeometryContext, point: Point): number {
+function rowKey(context: FamilyGeometryContext, point: Point): PackedKey {
   return pack(point, context.rowOffset, context.rowBase);
 }
 
@@ -93,12 +98,17 @@ function registerLine(context: FamilyGeometryContext, point: Point): number {
   return id;
 }
 
+function pairKey(low: number, high: number): PackedKey {
+  const packed = high * (high + 1) / 2 + low;
+  return Number.isSafeInteger(packed) ? packed : `${low}:${high}`;
+}
+
 function lineForPair(context: FamilyGeometryContext, firstId: number, secondId: number): number {
   let low = firstId;
   let high = secondId;
   if (low > high) [low, high] = [high, low];
-  const pairKey = high * (high + 1) / 2 + low;
-  const cached = context.pairLines.get(pairKey);
+  const key = pairKey(low, high);
+  const cached = context.pairLines.get(key);
   if (cached !== undefined) return cached - 1;
 
   const first = context.rowPoints[firstId];
@@ -109,7 +119,7 @@ function lineForPair(context: FamilyGeometryContext, firstId: number, secondId: 
     first[0] * second[1] - first[1] * second[0],
   ];
   if (cross[0] === 0 && cross[1] === 0 && cross[2] === 0) {
-    context.pairLines.set(pairKey, 0);
+    context.pairLines.set(key, 0);
     return -1;
   }
   const common = gcd3(Math.abs(cross[0]), Math.abs(cross[1]), Math.abs(cross[2]));
@@ -121,7 +131,7 @@ function lineForPair(context: FamilyGeometryContext, firstId: number, secondId: 
     }
   }
   const lineId = registerLine(context, line);
-  context.pairLines.set(pairKey, lineId + 1);
+  context.pairLines.set(key, lineId + 1);
   return lineId;
 }
 
@@ -151,7 +161,7 @@ function transitionRowsCached(
   }
   if (beta.some((point) => point === null)) throw new Error('downset character map is not surjective');
 
-  const unique = new Map<number, Point>();
+  const unique = new Map<PackedKey, Point>();
   for (let chi = 0; chi < r; chi += 1) {
     const source = beta[chi] as Point;
     for (let axis = 0; axis < 3; axis += 1) {

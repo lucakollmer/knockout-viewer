@@ -170,6 +170,28 @@ export default function AsetsPanel({ selected }: { selected: GroupRow | null }) 
   const running = ['cache', 'context', 'compute', 'finalize', 'cancelling'].includes(state.phase);
   const header = state.header;
   const performanceData = header?.performance;
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const startedAtRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    startedAtRef.current = null;
+    setElapsedMs(0);
+  }, [selected?.id]);
+
+  useEffect(() => {
+    if (!running) {
+      if (state.phase === 'idle') {
+        startedAtRef.current = null;
+        setElapsedMs(0);
+      }
+      return;
+    }
+    if (startedAtRef.current === null) startedAtRef.current = performance.now();
+    const update = () => setElapsedMs(performance.now() - (startedAtRef.current ?? performance.now()));
+    update();
+    const interval = window.setInterval(update, 100);
+    return () => window.clearInterval(interval);
+  }, [running, state.phase, selected?.id]);
   const viewerData = useMemo(() => {
     if (!selected || state.phase !== 'complete' || !header || !state.certificate) return null;
     if (state.records.length !== header.downsetTotal) return null;
@@ -185,6 +207,7 @@ export default function AsetsPanel({ selected }: { selected: GroupRow | null }) 
   } else if (running && state.emittedRecords > 0) {
     summary = `${phaseLabel(state.phase)} · ${state.emittedRecords.toLocaleString()}`;
   }
+  if (running) summary = `${summary} · ${(elapsedMs / 1000).toFixed(1)} s`;
 
   const loadingViewer = state.phase === 'complete' && header && state.records.length !== header.downsetTotal;
 

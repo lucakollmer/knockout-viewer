@@ -1,7 +1,12 @@
 import Box from '@mui/material/Box';
+import AsetsBenchmarkPage from './AsetsBenchmarkPage';
 import BrowserApp from './BrowserApp';
 
 export default function App() {
+  if (new URLSearchParams(window.location.search).get('benchmark') === 'asets') {
+    return <AsetsBenchmarkPage />;
+  }
+
   return (
     <Box
       sx={{
