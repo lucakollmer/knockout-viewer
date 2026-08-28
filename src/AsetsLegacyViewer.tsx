@@ -4,6 +4,7 @@ import type { LegacyViewerData } from './asetsLegacyAdapter';
 // Keep the embedded legacy visualizer isolated from the generated-data engine.
 // Preview review branch intentionally preserves the validated runtime behavior.
 // Alias-safe branch probe; no runtime behavior changes.
+// Fresh PR trigger after matching the proven Workers preview routing flags.
 const VIEWER_MESSAGE = 'knockout-asets-viewer-data';
 const READY_MESSAGE = 'knockout-asets-viewer-ready';
 
