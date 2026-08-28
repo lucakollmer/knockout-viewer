@@ -2,10 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import Card from '@mui/material/Card';
-import CardContent from '@mui/material/CardContent';
-import Chip from '@mui/material/Chip';
 import LinearProgress from '@mui/material/LinearProgress';
+import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import AsetsLegacyViewer from './AsetsLegacyViewer';
@@ -46,14 +44,13 @@ const EMPTY_STATE: PanelState = {
 function phaseLabel(phase: PanelPhase): string {
   switch (phase) {
     case 'cache': return 'checking cache';
-    case 'context': return 'preparing modulus';
+    case 'context': return 'preparing';
     case 'compute': return 'computing';
     case 'finalize': return 'finalizing';
-    case 'complete': return 'complete';
     case 'cancelled': return 'cancelled';
     case 'cancelling': return 'cancelling';
     case 'error': return 'error';
-    default: return 'idle';
+    default: return '';
   }
 }
 
@@ -173,61 +170,37 @@ export default function AsetsPanel({ selected }: { selected: GroupRow | null }) 
   const running = ['cache', 'context', 'compute', 'finalize', 'cancelling'].includes(state.phase);
   const header = state.header;
   const performanceData = header?.performance;
-  const family = state.familyKey ? `r=${state.familyKey[1]} · (${state.familyKey.slice(2).join(', ')})` : null;
   const viewerData = useMemo(() => {
     if (!selected || state.phase !== 'complete' || !header || !state.certificate) return null;
     if (state.records.length !== header.downsetTotal) return null;
     return makeLegacyViewerData(selected, state.records, state.certificate);
   }, [selected, state.phase, state.records, state.certificate, header]);
 
+  let summary = selected ? phaseLabel(state.phase) : 'select a group';
+  if (state.phase === 'complete' && header) {
+    summary = `${header.downsetTotal.toLocaleString()} A-sets`;
+    if (state.cached) summary += ' · cached';
+    else if (performanceData) summary += ` · ${performanceData.totalWorkerComputeMs.toFixed(1)} ms`;
+    if (header.noncoherentTotal) summary += ` · ${header.noncoherentTotal} noncoherent`;
+  } else if (running && state.emittedRecords > 0) {
+    summary = `${phaseLabel(state.phase)} · ${state.emittedRecords.toLocaleString()}`;
+  }
+
+  const loadingViewer = state.phase === 'complete' && header && state.records.length !== header.downsetTotal;
+
   return (
-    <Stack spacing={1.5}>
-      <Card variant="outlined">
-        <CardContent>
-          <Stack spacing={1}>
-            <Stack direction="row" useFlexGap sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 0.75 }}>
-              <Box>
-                <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Asets</Typography>
-                <Typography variant="caption" color="text.secondary">Exact browser generation · v0.3.10 visualizer · local cache</Typography>
-              </Box>
-              {selected ? <Chip size="small" variant="outlined" label={phaseLabel(state.phase)} /> : null}
-            </Stack>
-
-            {!selected ? (
-              <Typography variant="body2" color="text.secondary">Select a group to generate and inspect its Asets.</Typography>
-            ) : (
-              <>
-                {family ? <Typography variant="caption" color="text.secondary">Canonical family: {family}</Typography> : null}
-                {running ? <LinearProgress /> : null}
-                {state.error ? <Alert severity="error">{state.error}</Alert> : null}
-                {state.phase === 'cancelled' ? <Alert severity="info">Aset computation cancelled.</Alert> : null}
-
-                <Stack direction="row" useFlexGap sx={{ flexWrap: 'wrap', gap: 0.5 }}>
-                  {state.cached ? <Chip size="small" color="success" label="cached" /> : null}
-                  {state.emittedRecords > 0 ? <Chip size="small" label={`${state.emittedRecords.toLocaleString()} records`} /> : null}
-                  {header ? <Chip size="small" variant="outlined" label={`${header.coherentTotal} coherent`} /> : null}
-                  {header?.noncoherentTotal ? <Chip size="small" variant="outlined" label={`${header.noncoherentTotal} noncoherent`} /> : null}
-                </Stack>
-
-                {performanceData && !state.cached ? (
-                  <Typography variant="caption" color="text.secondary">
-                    worker {performanceData.totalWorkerComputeMs.toFixed(1)} ms · context {performanceData.modulusContextSetupMs.toFixed(1)} ms · CSP {performanceData.candidateCspEnumerationMs.toFixed(1)} ms · geometry {performanceData.geometryMs.toFixed(1)} ms · IndexedDB write {performanceData.indexedDbWriteMs.toFixed(1)} ms
-                  </Typography>
-                ) : null}
-                {performanceData && state.cached ? (
-                  <Typography variant="caption" color="text.secondary">IndexedDB family read {performanceData.indexedDbReadMs.toFixed(1)} ms</Typography>
-                ) : null}
-
-                {state.phase === 'complete' && header && state.records.length !== header.downsetTotal ? (
-                  <Alert severity="warning">Aset records are still loading for visualization.</Alert>
-                ) : null}
-                {running ? <Button size="small" variant="outlined" onClick={cancel}>Cancel</Button> : null}
-              </>
-            )}
-          </Stack>
-        </CardContent>
-      </Card>
+    <Paper variant="outlined" sx={{ minWidth: 0, overflow: 'hidden' }}>
+      <Box sx={{ px: 1.5, py: 0.9, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, borderBottom: 1, borderColor: 'divider' }}>
+        <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Asets</Typography>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', minWidth: 0 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>{summary}</Typography>
+          {running ? <Button size="small" variant="text" onClick={cancel}>Cancel</Button> : null}
+        </Stack>
+      </Box>
+      {running || loadingViewer ? <LinearProgress /> : null}
+      {state.error ? <Alert severity="error" sx={{ borderRadius: 0 }}>{state.error}</Alert> : null}
+      {state.phase === 'cancelled' ? <Alert severity="info" sx={{ borderRadius: 0 }}>Aset computation cancelled.</Alert> : null}
       {viewerData ? <AsetsLegacyViewer data={viewerData} /> : null}
-    </Stack>
+    </Paper>
   );
 }

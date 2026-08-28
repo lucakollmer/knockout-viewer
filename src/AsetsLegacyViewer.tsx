@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import Box from '@mui/material/Box';
-import Paper from '@mui/material/Paper';
 import Tab from '@mui/material/Tab';
 import Tabs from '@mui/material/Tabs';
 import type { LegacyViewerData } from './asetsLegacyAdapter';
@@ -45,19 +44,19 @@ export default function AsetsLegacyViewer({ data }: { data: LegacyViewerData }) 
   }, [mode, ready]);
 
   return (
-    <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
+    <Box sx={{ minWidth: 0 }}>
       <Tabs
         value={mode}
         onChange={(_event, next: ViewerMode) => setMode(next)}
         variant="fullWidth"
         aria-label="Aset viewer mode"
-        sx={{ borderBottom: 1, borderColor: 'divider', minHeight: 44 }}
+        sx={{ borderBottom: 1, borderColor: 'divider', minHeight: 40 }}
       >
         {VIEW_MODES.map((item) => (
-          <Tab key={item.value} value={item.value} label={item.label} sx={{ minHeight: 44 }} />
+          <Tab key={item.value} value={item.value} label={item.label} sx={{ minHeight: 40, py: 0.5 }} />
         ))}
       </Tabs>
-      <Box sx={{ height: { xs: 600, md: 640, xl: 'clamp(500px, calc(100dvh - 300px), 650px)' }, minHeight: 0 }}>
+      <Box sx={{ height: { xs: 560, md: 620, xl: 'clamp(470px, calc(100dvh - 250px), 700px)' }, minHeight: 0 }}>
         <iframe
           ref={frameRef}
           title="Generated Asets viewer"
@@ -71,6 +70,6 @@ export default function AsetsLegacyViewer({ data }: { data: LegacyViewerData }) 
           }}
         />
       </Box>
-    </Paper>
+    </Box>
   );
 }

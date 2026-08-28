@@ -82,6 +82,11 @@ function useGroupNavigator(d: number, exactR?: number) {
   return { rows, status, requestMore };
 }
 
+function groupNotationText(row: GroupRow): string {
+  const block = (residue: number, multiplicity: number) => multiplicity === 1 ? String(residue) : `${residue}^${multiplicity}`;
+  return `1/${row.r} (${block(row.a, row.n)}, ${block(row.b, row.m)}, ${block(row.c, row.k)})`;
+}
+
 function GroupNotation({ row }: { row: GroupRow }) {
   const block = (residue: number, multiplicity: number) => (
     <Box component="span" sx={{ whiteSpace: 'nowrap' }}>
@@ -90,7 +95,7 @@ function GroupNotation({ row }: { row: GroupRow }) {
     </Box>
   );
   return (
-    <Typography component="span" variant="body2" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
+    <Typography component="span" variant="body2" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600, whiteSpace: 'nowrap' }}>
       1/{row.r} ({block(row.a, row.n)}, {block(row.b, row.m)}, {block(row.c, row.k)})
     </Typography>
   );
@@ -145,8 +150,8 @@ function DirectSelector({ onOpen }: { onOpen: (row: GroupRow) => void }) {
 
   return (
     <Card variant="outlined">
-      <CardContent>
-        <Stack spacing={1.25}>
+      <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+        <Stack spacing={1}>
           <Box>
             <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Direct selection</Typography>
             <Typography variant="caption" color="text.secondary">Enter three values in either row and leave the inferable fourth blank.</Typography>
@@ -165,11 +170,9 @@ function DirectSelector({ onOpen }: { onOpen: (row: GroupRow) => void }) {
             </Box>
           ) : null}
           {resolution.error || canonicalError ? <Alert severity="error">{resolution.error ?? canonicalError}</Alert> : null}
-          {!resolution.error && resolution.hint ? <Alert severity="info">{resolution.hint}</Alert> : null}
           {canonical ? (
-            <Paper variant="outlined" sx={{ p: 1.25, bgcolor: 'action.hover' }}>
-              <Typography variant="caption" color="text.secondary">Canonical effective presentation</Typography>
-              <Box sx={{ mt: 0.25 }}><GroupNotation row={canonical} /></Box>
+            <Paper variant="outlined" sx={{ p: 1, bgcolor: 'action.hover' }}>
+              <GroupNotation row={canonical} />
             </Paper>
           ) : null}
           <Stack direction="row" spacing={1}>
@@ -182,8 +185,9 @@ function DirectSelector({ onOpen }: { onOpen: (row: GroupRow) => void }) {
   );
 }
 
-const ROW_HEIGHT = 42;
+const ROW_HEIGHT = 36;
 const OVERSCAN = 10;
+const NUMBER_COLUMNS: Array<keyof Pick<GroupRow, 'd' | 'r' | 'n' | 'm' | 'k' | 'a' | 'b' | 'c'>> = ['d', 'r', 'n', 'm', 'k', 'a', 'b', 'c'];
 
 function VirtualTable({ rows, selected, onSelect, onNeedMore }: {
   rows: GroupRow[];
@@ -216,57 +220,81 @@ function VirtualTable({ rows, selected, onSelect, onNeedMore }: {
     }
   }, [selectedIndex]);
 
+  const metrics = useMemo(() => {
+    const groupChars = Math.max('Group'.length, ...rows.map((row) => groupNotationText(row).length));
+    const groupWidth = Math.max(96, Math.min(210, Math.ceil(groupChars * 7 + 12)));
+    const numericWidths = NUMBER_COLUMNS.map((name) => {
+      const chars = Math.max(name.length, ...rows.map((row) => String(row[name]).length));
+      return Math.max(28, Math.min(54, chars * 8 + 12));
+    });
+    const gap = 6;
+    const horizontalPadding = 12;
+    const totalWidth = groupWidth + numericWidths.reduce((sum, width) => sum + width, 0) + gap * NUMBER_COLUMNS.length + horizontalPadding;
+    return {
+      template: `${groupWidth}px ${numericWidths.map((width) => `${width}px`).join(' ')}`,
+      totalWidth,
+    };
+  }, [rows]);
+
   const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
   const end = Math.min(rows.length, Math.ceil((scrollTop + height) / ROW_HEIGHT) + OVERSCAN);
   const visible = rows.slice(start, end);
-  const columns = { xs: 'minmax(0,1fr) 56px', md: 'minmax(240px,1fr) repeat(8,56px)' };
 
-  const numberCell = (value: number, always = false) => (
-    <Typography variant="body2" sx={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', display: always ? 'block' : { xs: 'none', md: 'block' } }}>
+  const numberCell = (value: number) => (
+    <Typography variant="body2" sx={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
       {value}
     </Typography>
   );
 
+  const rowGrid = {
+    display: 'grid',
+    gridTemplateColumns: metrics.template,
+    columnGap: '6px',
+    alignItems: 'center',
+    px: 0.75,
+  } as const;
+
   return (
-    <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ display: 'grid', gridTemplateColumns: columns, gap: 0.5, px: 1.25, py: 0.8, bgcolor: 'action.hover', borderBottom: 1, borderColor: 'divider' }}>
-        <Typography variant="caption" sx={{ fontWeight: 700 }}>Group</Typography>
-        {['d', 'r', 'n', 'm', 'k', 'a', 'b', 'c'].map((name, index) => (
-          <Typography key={name} variant="caption" sx={{ fontWeight: 700, textAlign: 'right', display: index === 1 ? 'block' : { xs: 'none', md: 'block' } }}>{name}</Typography>
-        ))}
-      </Box>
-      <Box
-        ref={viewportRef}
-        onScroll={(event) => {
-          const element = event.currentTarget;
-          setScrollTop(element.scrollTop);
-          if (element.scrollHeight - element.scrollTop - element.clientHeight < 1200) onNeedMore();
-        }}
-        sx={{ flex: 1, minHeight: 0, overflowY: 'auto', position: 'relative' }}
-      >
-        <Box sx={{ height: rows.length * ROW_HEIGHT, position: 'relative' }}>
-          {visible.map((row, offset) => {
-            const index = start + offset;
-            const active = row.id === selected?.id;
-            return (
-              <Box
-                key={row.id}
-                tabIndex={0}
-                onClick={() => onSelect(row)}
-                onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onSelect(row); }}
-                sx={{
-                  position: 'absolute', top: index * ROW_HEIGHT, left: 0, right: 0, height: ROW_HEIGHT,
-                  display: 'grid', gridTemplateColumns: columns, gap: 0.5, alignItems: 'center', px: 1.25,
-                  borderBottom: 1, borderColor: 'divider', bgcolor: active ? 'action.selected' : 'background.paper',
-                  cursor: 'pointer', '&:hover': { bgcolor: active ? 'action.selected' : 'action.hover' },
-                }}
-              >
-                <Box sx={{ minWidth: 0, overflow: 'hidden' }}><GroupNotation row={row} /></Box>
-                {numberCell(row.d)}{numberCell(row.r, true)}{numberCell(row.n)}{numberCell(row.m)}
-                {numberCell(row.k)}{numberCell(row.a)}{numberCell(row.b)}{numberCell(row.c)}
-              </Box>
-            );
-          })}
+    <Box sx={{ flex: 1, minHeight: 0, overflowX: 'auto', overflowY: 'hidden', scrollbarGutter: 'stable' }}>
+      <Box sx={{ width: `max(100%, ${metrics.totalWidth}px)`, height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <Box sx={{ ...rowGrid, py: 0.65, bgcolor: 'action.hover', borderBottom: 1, borderColor: 'divider', flex: '0 0 auto' }}>
+          <Typography variant="caption" sx={{ fontWeight: 700 }}>Group</Typography>
+          {NUMBER_COLUMNS.map((name) => (
+            <Typography key={name} variant="caption" sx={{ fontWeight: 700, textAlign: 'right' }}>{name}</Typography>
+          ))}
+        </Box>
+        <Box
+          ref={viewportRef}
+          onScroll={(event) => {
+            const element = event.currentTarget;
+            setScrollTop(element.scrollTop);
+            if (element.scrollHeight - element.scrollTop - element.clientHeight < 1200) onNeedMore();
+          }}
+          sx={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', position: 'relative' }}
+        >
+          <Box sx={{ height: rows.length * ROW_HEIGHT, position: 'relative', width: '100%' }}>
+            {visible.map((row, offset) => {
+              const index = start + offset;
+              const active = row.id === selected?.id;
+              return (
+                <Box
+                  key={row.id}
+                  tabIndex={0}
+                  onClick={() => onSelect(row)}
+                  onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onSelect(row); }}
+                  sx={{
+                    ...rowGrid,
+                    position: 'absolute', top: index * ROW_HEIGHT, left: 0, right: 0, height: ROW_HEIGHT,
+                    borderBottom: 1, borderColor: 'divider', bgcolor: active ? 'action.selected' : 'background.paper',
+                    cursor: 'pointer', '&:hover': { bgcolor: active ? 'action.selected' : 'action.hover' },
+                  }}
+                >
+                  <Box sx={{ minWidth: 0, overflow: 'hidden' }}><GroupNotation row={row} /></Box>
+                  {NUMBER_COLUMNS.map((name) => <Box key={name}>{numberCell(row[name])}</Box>)}
+                </Box>
+              );
+            })}
+          </Box>
         </Box>
       </Box>
     </Box>
@@ -402,8 +430,7 @@ export default function BrowserApp() {
                 <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} sx={{ justifyContent: 'space-between', alignItems: { md: 'flex-end' } }}>
                   <Box>
                     <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Canonical groups</Typography>
-                    <Typography variant="caption" color="text.secondary">Order: r, then k, m, n, a, b, c. Scroll to generate more.</Typography>
-                    <Stack direction="row" spacing={0.75} sx={{ mt: 1, alignItems: 'center' }}>
+                    <Stack direction="row" spacing={0.75} sx={{ mt: 0.75, alignItems: 'center' }}>
                       <TextField
                         label="d"
                         type="number"
@@ -468,11 +495,10 @@ export default function BrowserApp() {
                   },
                 }}
               >
-                <Card variant="outlined"><CardContent>
+                <Card variant="outlined"><CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
                   <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Selected group</Typography>
-                  {selected ? <Stack spacing={1} sx={{ mt: 1 }}>
-                    <Paper variant="outlined" sx={{ p: 1.2, bgcolor: 'action.hover' }}><GroupNotation row={selected} /></Paper>
-                    <Typography variant="caption" color="text.secondary">d={selected.d}, r={selected.r}; n,m,k=({selected.n},{selected.m},{selected.k}); a,b,c=({selected.a},{selected.b},{selected.c})</Typography>
+                  {selected ? <Stack spacing={1} sx={{ mt: 0.75 }}>
+                    <Paper variant="outlined" sx={{ p: 1, bgcolor: 'action.hover' }}><GroupNotation row={selected} /></Paper>
                     <Stack direction="row" spacing={1}>
                       <Button variant="outlined" disabled={selectedIndex <= 0} onClick={() => selectOffset(-1)} fullWidth>Previous</Button>
                       <Button variant="outlined" disabled={selectedIndex < 0 || selectedIndex >= rows.length - 1} onClick={() => selectOffset(1)} fullWidth>Next</Button>
@@ -481,7 +507,6 @@ export default function BrowserApp() {
                 </CardContent></Card>
 
                 <DirectSelector onOpen={openDirect} />
-                <Typography variant="caption" color="text.secondary" sx={{ px: 2, py: 1.25, borderTop: 1, borderColor: 'divider' }}>Enumeration runs entirely in your browser and caches locally.</Typography>
               </Stack>
             </Paper>
           </Box>

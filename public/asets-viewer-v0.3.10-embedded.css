@@ -9,11 +9,13 @@ main{padding:14px;display:flex;flex-direction:column;gap:14px}.panel{background:
 
 html,body.embedded-viewer{height:100%}
 body.embedded-viewer{overflow:hidden;background:#fff}
-body.embedded-viewer header,body.embedded-viewer #databaseBrowserPanel{display:none!important}
+body.embedded-viewer header,body.embedded-viewer #databaseBrowserPanel,body.embedded-viewer #metaPanel{display:none!important}
 body.embedded-viewer main{padding:0;gap:0;height:100%;min-height:0;display:flex;flex-direction:column}
-body.embedded-viewer #metaPanel{flex:0 0 auto;border:0;border-radius:0;border-bottom:1px solid #e6e6e6}
-body.embedded-viewer #metaPanel .meta{border-bottom:0}
 body.embedded-viewer .viewer-panel{display:none;flex:1 1 auto;min-height:0;border:0;border-radius:0;overflow:hidden;flex-direction:column}
 body.embedded-viewer[data-view-mode="projection"] #projectionPanel,body.embedded-viewer[data-view-mode="raw"] #rawPanel,body.embedded-viewer[data-view-mode="monomial"] #monomialPanel{display:flex}
-body.embedded-viewer .viewer-panel .panel-head,body.embedded-viewer .viewer-panel>.meta{flex:0 0 auto}
+body.embedded-viewer .viewer-panel .panel-head{padding:6px 8px;flex:0 0 auto;justify-content:flex-start}
+body.embedded-viewer .viewer-panel .panel-head h2{display:none}
+body.embedded-viewer .viewer-panel .toolbar{gap:6px}
+body.embedded-viewer #projectionPanel>.meta,body.embedded-viewer #rawPanel>.meta{display:none!important}
+body.embedded-viewer #monomialPanel>#asetMeta{padding:6px 10px;flex:0 0 auto}
 body.embedded-viewer .viewer-panel .plot-wrap,body.embedded-viewer .viewer-panel .plot-wrap.small{height:auto;min-height:260px;flex:1 1 auto}
