@@ -1,5 +1,6 @@
 # Benchmark mirror trigger
 
-This branch is a diagnostic fallback only. Normal benchmark readback should use the exact-SHA relay linked from the benchmark PR so browser/web readers discover the Cloudflare URL through GitHub.
+Target SHA: 33de020906c9a4100eb74bf5500d18bf3b6aaf7b
+Requested: 2026-08-28T15:26:00Z
 
-Last diagnostic trigger: 2026-08-28T15:17:30Z
+This diagnostic branch bridges an exact Cloudflare KV benchmark into GitHub without any user handoff.
