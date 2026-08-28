@@ -3,7 +3,9 @@ import { assertExactRuntimeModulus } from './asetsRuntime';
 
 type PackedKey = number | string;
 
-/** Family-local exact geometry reuse for one clicked Aset family. */
+// A dense triangular cache is much faster for the hot low row IDs; cap it at 16 MiB and fall back to the sparse Map beyond that.
+const DENSE_PAIR_CACHE_LIMIT_ENTRIES = 4 * 1024 * 1024;
+
 export type FamilyGeometryContext = {
   r: number;
   residues: Point;
@@ -16,7 +18,18 @@ export type FamilyGeometryContext = {
   lineIds: Map<PackedKey, number>;
   linePoints: Point[];
   pairLines: Map<PackedKey, number>;
+  pairLineDense: Uint32Array;
   quotientScales: number[];
+  betaPoints: Array<Point | undefined>;
+  characterEpochs: Uint32Array;
+  rowEpochs: Uint32Array;
+  recordEpoch: number;
+  linePositiveWitnesses: number[];
+  lineNegativeWitnesses: number[];
+  previousRowIds: number[];
+  activeRowFlags: Uint8Array;
+  linePairCounts: number[];
+  activeLineIds: Set<number>;
 };
 
 export function createFamilyGeometryContext(r: number, residues: Point): FamilyGeometryContext {
@@ -38,16 +51,31 @@ export function createFamilyGeometryContext(r: number, residues: Point): FamilyG
     lineIds: new Map(),
     linePoints: [],
     pairLines: new Map(),
+    pairLineDense: new Uint32Array(16),
     quotientScales: [],
+    betaPoints: new Array<Point | undefined>(r),
+    characterEpochs: new Uint32Array(r),
+    rowEpochs: new Uint32Array(16),
+    recordEpoch: 0,
+    linePositiveWitnesses: [],
+    lineNegativeWitnesses: [],
+    previousRowIds: [],
+    activeRowFlags: new Uint8Array(16),
+    linePairCounts: [],
+    activeLineIds: new Set(),
   };
 }
 
-function pack(point: Point, offset: number, base: number): PackedKey {
-  const first = point[0] + offset;
-  const second = point[1] + offset;
-  const third = point[2] + offset;
+function packCoordinates(firstValue: number, secondValue: number, thirdValue: number, offset: number, base: number): PackedKey {
+  const first = firstValue + offset;
+  const second = secondValue + offset;
+  const third = thirdValue + offset;
   const packed = (first * base + second) * base + third;
-  return Number.isSafeInteger(packed) ? packed : `${point[0]},${point[1]},${point[2]}`;
+  return Number.isSafeInteger(packed) ? packed : `${firstValue},${secondValue},${thirdValue}`;
+}
+
+function pack(point: Point, offset: number, base: number): PackedKey {
+  return packCoordinates(point[0], point[1], point[2], offset, base);
 }
 
 function comparePoint(first: Point, second: Point): number {
@@ -73,17 +101,42 @@ function gcd4(first: number, second: number, third: number, fourth: number): num
   return gcd2(gcd3(first, second, third), fourth);
 }
 
-function rowKey(context: FamilyGeometryContext, point: Point): PackedKey {
-  return pack(point, context.rowOffset, context.rowBase);
+function ensureEpochCapacity(values: Uint32Array, needed: number): Uint32Array {
+  if (needed <= values.length) return values;
+  let size = values.length || 16;
+  while (size < needed) size *= 2;
+  const expanded = new Uint32Array(size);
+  expanded.set(values);
+  return expanded;
 }
 
-function registerRow(context: FamilyGeometryContext, point: Point): number {
-  const key = rowKey(context, point);
+function ensureFlagCapacity(values: Uint8Array, needed: number): Uint8Array {
+  if (needed <= values.length) return values;
+  let size = values.length || 16;
+  while (size < needed) size *= 2;
+  const expanded = new Uint8Array(size);
+  expanded.set(values);
+  return expanded;
+}
+
+function nextRecordEpoch(context: FamilyGeometryContext): number {
+  if (context.recordEpoch >= 0xfffffffe) {
+    context.characterEpochs.fill(0);
+    context.rowEpochs.fill(0);
+    context.recordEpoch = 1;
+  } else {
+    context.recordEpoch += 1;
+  }
+  return context.recordEpoch;
+}
+
+function registerRowCoordinates(context: FamilyGeometryContext, x: number, y: number, z: number): number {
+  const key = packCoordinates(x, y, z, context.rowOffset, context.rowBase);
   const cached = context.rowIds.get(key);
   if (cached !== undefined) return cached;
   const id = context.rowPoints.length;
   context.rowIds.set(key, id);
-  context.rowPoints.push(point);
+  context.rowPoints.push([x, y, z]);
   return id;
 }
 
@@ -95,6 +148,9 @@ function registerLine(context: FamilyGeometryContext, point: Point): number {
   context.lineIds.set(key, id);
   context.linePoints.push(point);
   context.quotientScales.push(0);
+  context.linePositiveWitnesses.push(0);
+  context.lineNegativeWitnesses.push(0);
+  context.linePairCounts.push(0);
   return id;
 }
 
@@ -108,9 +164,22 @@ function lineForPair(context: FamilyGeometryContext, firstId: number, secondId: 
   let high = secondId;
   if (low > high) [low, high] = [high, low];
   const key = pairKey(low, high);
-  const cached = context.pairLines.get(key);
-  if (cached !== undefined) return cached - 1;
-
+  let denseKey = -1;
+  if (typeof key === 'number' && key < DENSE_PAIR_CACHE_LIMIT_ENTRIES) {
+    denseKey = key;
+    if (denseKey >= context.pairLineDense.length) {
+      let size = context.pairLineDense.length;
+      while (size <= denseKey && size < DENSE_PAIR_CACHE_LIMIT_ENTRIES) size *= 2;
+      const expanded = new Uint32Array(Math.min(size, DENSE_PAIR_CACHE_LIMIT_ENTRIES));
+      expanded.set(context.pairLineDense);
+      context.pairLineDense = expanded;
+    }
+    const encoded = context.pairLineDense[denseKey];
+    if (encoded !== 0) return encoded === 1 ? -1 : encoded - 2;
+  } else {
+    const cached = context.pairLines.get(key);
+    if (cached !== undefined) return cached - 1;
+  }
   const first = context.rowPoints[firstId];
   const second = context.rowPoints[secondId];
   const cross: Point = [
@@ -119,7 +188,8 @@ function lineForPair(context: FamilyGeometryContext, firstId: number, secondId: 
     first[0] * second[1] - first[1] * second[0],
   ];
   if (cross[0] === 0 && cross[1] === 0 && cross[2] === 0) {
-    context.pairLines.set(key, 0);
+    if (denseKey >= 0) context.pairLineDense[denseKey] = 1;
+    else context.pairLines.set(key, 0);
     return -1;
   }
   const common = gcd3(Math.abs(cross[0]), Math.abs(cross[1]), Math.abs(cross[2]));
@@ -131,7 +201,8 @@ function lineForPair(context: FamilyGeometryContext, firstId: number, secondId: 
     }
   }
   const lineId = registerLine(context, line);
-  context.pairLines.set(key, lineId + 1);
+  if (denseKey >= 0) context.pairLineDense[denseKey] = lineId + 2;
+  else context.pairLines.set(key, lineId + 1);
   return lineId;
 }
 
@@ -148,60 +219,127 @@ function quotientScale(context: FamilyGeometryContext, lineId: number): number {
   return scale;
 }
 
-type RowsWithIds = { rows: Point[]; rowIds: number[] };
+function markRow(context: FamilyGeometryContext, rowId: number, epoch: number, rowIds: number[]): void {
+  context.rowEpochs = ensureEpochCapacity(context.rowEpochs, rowId + 1);
+  if (context.rowEpochs[rowId] === epoch) return;
+  context.rowEpochs[rowId] = epoch;
+  rowIds.push(rowId);
+}
+
+type RowsWithIds = { rows: Point[]; rowIds: number[]; epoch: number };
 
 function transitionRowsCached(
   downset: readonly Point[], residues: Point, r: number, context: FamilyGeometryContext,
 ): RowsWithIds {
-  const beta: Array<Point | null> = Array.from({ length: r }, () => null);
+  if (downset.length !== r) throw new Error('downset character map is not surjective');
+  const epoch = nextRecordEpoch(context);
+  const beta = context.betaPoints;
   for (const point of downset) {
     const chi = (point[0] * residues[0] + point[1] * residues[1] + point[2] * residues[2]) % r;
-    if (beta[chi] !== null) throw new Error('downset character map is not injective');
+    if (context.characterEpochs[chi] === epoch) throw new Error('downset character map is not injective');
+    context.characterEpochs[chi] = epoch;
     beta[chi] = point;
   }
-  if (beta.some((point) => point === null)) throw new Error('downset character map is not surjective');
 
-  const unique = new Map<PackedKey, Point>();
+  const rowIds: number[] = [];
   for (let chi = 0; chi < r; chi += 1) {
-    const source = beta[chi] as Point;
+    const source = beta[chi];
+    if (!source) throw new Error('downset character map is not surjective');
     for (let axis = 0; axis < 3; axis += 1) {
-      const target = beta[(chi + residues[axis]) % r] as Point;
-      const row: Point = [
-        source[0] - target[0] + (axis === 0 ? 1 : 0),
-        source[1] - target[1] + (axis === 1 ? 1 : 0),
-        source[2] - target[2] + (axis === 2 ? 1 : 0),
-      ];
-      if (row[0] !== 0 || row[1] !== 0 || row[2] !== 0) unique.set(rowKey(context, row), row);
+      const target = beta[(chi + residues[axis]) % r];
+      if (!target) throw new Error('downset character map is not surjective');
+      const x = source[0] - target[0] + (axis === 0 ? 1 : 0);
+      const y = source[1] - target[1] + (axis === 1 ? 1 : 0);
+      const z = source[2] - target[2] + (axis === 2 ? 1 : 0);
+      if (x === 0 && y === 0 && z === 0) continue;
+      markRow(context, registerRowCoordinates(context, x, y, z), epoch, rowIds);
     }
   }
-  const rows = [...unique.values()].sort(comparePoint);
-  return { rows, rowIds: rows.map((row) => registerRow(context, row)) };
+  rowIds.sort((first, second) => comparePoint(context.rowPoints[first], context.rowPoints[second]));
+  return { rows: rowIds.map((rowId) => context.rowPoints[rowId]), rowIds, epoch };
 }
 
 type Normal = { lineId: number; sign: 1 | -1; point: Point };
 
-function supportingNormalsCached(rowIds: readonly number[], context: FamilyGeometryContext): Normal[] {
-  const lineIds = new Set<number>();
-  for (let first = 0; first < rowIds.length; first += 1) {
-    for (let second = first + 1; second < rowIds.length; second += 1) {
-      const lineId = lineForPair(context, rowIds[first], rowIds[second]);
-      if (lineId >= 0) lineIds.add(lineId);
+function adjustActiveLinePair(context: FamilyGeometryContext, firstId: number, secondId: number, delta: 1 | -1): void {
+  const lineId = lineForPair(context, firstId, secondId);
+  if (lineId < 0) return;
+  const previous = context.linePairCounts[lineId];
+  const next = previous + delta;
+  if (next < 0) throw new Error('internal geometry line-pair count underflow');
+  context.linePairCounts[lineId] = next;
+  if (previous === 0 && next !== 0) context.activeLineIds.add(lineId);
+  else if (previous !== 0 && next === 0) context.activeLineIds.delete(lineId);
+}
+
+// Consecutive CSP emissions differ by only a few transition rows. Maintain the exact
+// candidate-line multiset by adding/removing only pairs touched by those row changes.
+function syncActiveLines(rowIds: readonly number[], context: FamilyGeometryContext, epoch: number): void {
+  const maxRowId = rowIds.reduce((maximum, rowId) => Math.max(maximum, rowId), -1);
+  context.activeRowFlags = ensureFlagCapacity(context.activeRowFlags, maxRowId + 1);
+  const previous = context.previousRowIds;
+  if (previous.length === 0) {
+    for (let first = 0; first < rowIds.length; first += 1) {
+      for (let second = first + 1; second < rowIds.length; second += 1) {
+        adjustActiveLinePair(context, rowIds[first], rowIds[second], 1);
+      }
+    }
+    for (const rowId of rowIds) context.activeRowFlags[rowId] = 1;
+    context.previousRowIds = [...rowIds];
+    return;
+  }
+
+  for (const removed of previous) {
+    if (context.rowEpochs[removed] === epoch) continue;
+    for (const other of previous) {
+      if (other === removed) continue;
+      const otherRemoved = context.rowEpochs[other] !== epoch;
+      if (!otherRemoved || removed < other) adjustActiveLinePair(context, removed, other, -1);
     }
   }
+  for (const added of rowIds) {
+    if (context.activeRowFlags[added] !== 0) continue;
+    for (const other of rowIds) {
+      if (other === added) continue;
+      const otherAdded = context.activeRowFlags[other] === 0;
+      if (!otherAdded || added < other) adjustActiveLinePair(context, added, other, 1);
+    }
+  }
+  for (const removed of previous) if (context.rowEpochs[removed] !== epoch) context.activeRowFlags[removed] = 0;
+  for (const added of rowIds) context.activeRowFlags[added] = 1;
+  context.previousRowIds = [...rowIds];
+}
+
+function supportingNormalsCached(rowIds: readonly number[], context: FamilyGeometryContext, epoch: number): Normal[] {
+  syncActiveLines(rowIds, context, epoch);
   const normals: Normal[] = [];
-  for (const lineId of lineIds) {
+  for (const lineId of context.activeLineIds) {
+    const previousPositive = context.linePositiveWitnesses[lineId];
+    const previousNegative = context.lineNegativeWitnesses[lineId];
+    // A remembered sign witness is globally valid for this line. If one side is
+    // still present, seed the scan with it and search only for the missing side.
+    let positive = previousPositive !== 0 && context.rowEpochs[previousPositive - 1] === epoch ? previousPositive : 0;
+    let negative = previousNegative !== 0 && context.rowEpochs[previousNegative - 1] === epoch ? previousNegative : 0;
+    if (positive !== 0 && negative !== 0) continue;
+    let mixed = false;
     const line = context.linePoints[lineId];
-    let nonnegative = true;
-    let nonpositive = true;
     for (const rowId of rowIds) {
       const row = context.rowPoints[rowId];
       const value = line[0] * row[0] + line[1] * row[1] + line[2] * row[2];
-      if (value < 0) nonnegative = false;
-      if (value > 0) nonpositive = false;
-      if (!nonnegative && !nonpositive) break;
+      if (value > 0 && positive === 0) positive = rowId + 1;
+      else if (value < 0 && negative === 0) negative = rowId + 1;
+      if (positive !== 0 && negative !== 0) {
+        context.linePositiveWitnesses[lineId] = positive;
+        context.lineNegativeWitnesses[lineId] = negative;
+        mixed = true;
+        break;
+      }
     }
-    if (nonnegative) normals.push({ lineId, sign: 1, point: line });
-    else if (nonpositive) normals.push({ lineId, sign: -1, point: [-line[0], -line[1], -line[2]] });
+    if (mixed) continue;
+    if (positive !== 0) context.linePositiveWitnesses[lineId] = positive;
+    if (negative !== 0) context.lineNegativeWitnesses[lineId] = negative;
+    if (negative === 0) normals.push({ lineId, sign: 1, point: line });
+    else if (positive === 0) normals.push({ lineId, sign: -1, point: [-line[0], -line[1], -line[2]] });
   }
   normals.sort((first, second) => comparePoint(first.point, second.point));
   return normals;
@@ -213,8 +351,8 @@ export function geometryRecordCached(
   if (context.r !== r || context.residues.some((value, axis) => value !== residues[axis])) {
     throw new Error('family geometry context does not match r/residues');
   }
-  const { rows, rowIds } = transitionRowsCached(downset, residues, r, context);
-  const normals = supportingNormalsCached(rowIds, context);
+  const { rows, rowIds, epoch } = transitionRowsCached(downset, residues, r, context);
+  const normals = supportingNormalsCached(rowIds, context, epoch);
 
   let coherent = false;
   let witness: Point | null = null;
