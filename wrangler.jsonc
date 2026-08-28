@@ -1,13 +1,19 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "knockout-viewer",
+  "main": "./worker/benchmark-relay.js",
   "compatibility_date": "2026-08-26",
   "workers_dev": false,
   "preview_urls": true,
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "single-page-application"
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/benchmarks/latest"]
   },
+  "kv_namespaces": [
+    { "binding": "BENCHMARKS", "id": "4391d2480c8f4a87b2c92f989a5735f0" }
+  ],
   "routes": [
     {
       "pattern": "knockout.lucakollmer.com",
