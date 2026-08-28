@@ -8,7 +8,7 @@
     "dev": "vite",
     "test": "vitest run",
     "typecheck": "tsc -b",
-    "build": "npm run test && npm run typecheck && node scripts/write-deployment.mjs && vite build",
+    "build": "npm run test && npm run typecheck && node scripts/write-deployment.mjs && vite build && node scripts/mirror-benchmark.mjs",
     "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
