@@ -1,11 +1,12 @@
 import Box from '@mui/material/Box';
 import AsetsBenchmarkPageV2 from './AsetsBenchmarkPageV2';
+import AsetsFrontierBenchmarkPage from './AsetsFrontierBenchmarkPage';
 import BrowserApp from './BrowserApp';
 
 export default function App() {
-  if (new URLSearchParams(window.location.search).get('benchmark') === 'asets') {
-    return <AsetsBenchmarkPageV2 />;
-  }
+  const benchmark = new URLSearchParams(window.location.search).get('benchmark');
+  if (benchmark === 'asets-frontier') return <AsetsFrontierBenchmarkPage />;
+  if (benchmark === 'asets') return <AsetsBenchmarkPageV2 />;
 
   return (
     <Box
