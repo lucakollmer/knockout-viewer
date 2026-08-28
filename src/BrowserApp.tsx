@@ -359,70 +359,83 @@ export default function BrowserApp() {
           <Typography variant="h5" sx={{ fontWeight: 800 }}>Knockout group browser</Typography>
           <Typography variant="body2" color="text.secondary">Canonical effective cyclic SL three-block presentations, generated locally as you navigate.</Typography>
         </Box>
-        <Box component="main" sx={{ p: { xs: 1.5, md: 2.5 }, display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(0,1fr) 390px' }, gap: 2, height: { lg: 'calc(100vh - 86px)' }, minHeight: 0 }}>
-          <Paper variant="outlined" sx={{ minHeight: { xs: 560, lg: 0 }, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            <Box sx={{ px: 1.5, py: 1, borderBottom: 1, borderColor: 'divider' }}>
-              <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} sx={{ justifyContent: 'space-between', alignItems: { md: 'flex-end' } }}>
-                <Box>
-                  <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Canonical groups</Typography>
-                  <Typography variant="caption" color="text.secondary">Order: r, then k, m, n, a, b, c. Scroll to generate more.</Typography>
-                  <Stack direction="row" spacing={0.75} sx={{ mt: 1, alignItems: 'center' }}>
-                    <TextField
-                      label="d"
-                      type="number"
-                      value={dimensionText}
-                      onChange={(event) => updateDimension(event.target.value)}
-                      onBlur={applyDimension}
-                      onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
-                      size="small"
-                      sx={{ width: 92 }}
-                      slotProps={{ htmlInput: { min: 3, step: 1, 'aria-label': 'Dimension d' } }}
-                    />
-                    <TextField
-                      label="r"
-                      type="number"
-                      value={modulusText}
-                      placeholder="all"
-                      onChange={(event) => updateModulus(event.target.value)}
-                      onBlur={applyModulus}
-                      onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
-                      size="small"
-                      sx={{ width: 112 }}
-                      slotProps={{ htmlInput: { min: 2, step: 1, 'aria-label': 'Modulus r; leave blank for all moduli' } }}
-                    />
+        <Box component="main" sx={{ p: { xs: 1.5, md: 2.5 }, display: 'flex', flexDirection: 'column', gap: 2, minHeight: 0 }}>
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: { xs: '1fr', lg: 'minmax(0,1fr) 390px' },
+              gap: 2,
+              height: { lg: 'calc(100vh - 126px)' },
+              minHeight: 0,
+            }}
+          >
+            <Paper variant="outlined" sx={{ minHeight: { xs: 560, lg: 0 }, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+              <Box sx={{ px: 1.5, py: 1, borderBottom: 1, borderColor: 'divider' }}>
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} sx={{ justifyContent: 'space-between', alignItems: { md: 'flex-end' } }}>
+                  <Box>
+                    <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Canonical groups</Typography>
+                    <Typography variant="caption" color="text.secondary">Order: r, then k, m, n, a, b, c. Scroll to generate more.</Typography>
+                    <Stack direction="row" spacing={0.75} sx={{ mt: 1, alignItems: 'center' }}>
+                      <TextField
+                        label="d"
+                        type="number"
+                        value={dimensionText}
+                        onChange={(event) => updateDimension(event.target.value)}
+                        onBlur={applyDimension}
+                        onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+                        size="small"
+                        sx={{ width: 92 }}
+                        slotProps={{ htmlInput: { min: 3, step: 1, 'aria-label': 'Dimension d' } }}
+                      />
+                      <TextField
+                        label="r"
+                        type="number"
+                        value={modulusText}
+                        placeholder="all"
+                        onChange={(event) => updateModulus(event.target.value)}
+                        onBlur={applyModulus}
+                        onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+                        size="small"
+                        sx={{ width: 112 }}
+                        slotProps={{ htmlInput: { min: 2, step: 1, 'aria-label': 'Modulus r; leave blank for all moduli' } }}
+                      />
+                    </Stack>
+                  </Box>
+                  <Stack direction="row" useFlexGap sx={{ flexWrap: 'wrap', gap: 0.5, alignItems: 'center', justifyContent: { md: 'flex-end' } }}>
+                    <Chip size="small" label={`${rows.length.toLocaleString()} loaded`} />
+                    {exactR === undefined ? <Chip size="small" variant="outlined" label={status.lastCompletedR ? `through r=${status.lastCompletedR}` : 'starting r=2'} /> : null}
+                    {exactR !== undefined && status.exactDone ? <Chip size="small" variant="outlined" label="r complete" /> : null}
+                    {status.computing ? <Chip size="small" color="primary" label="generating…" /> : null}
+                    {status.cacheHits ? <Chip size="small" variant="outlined" label={`${status.cacheHits} cached`} /> : null}
+                    {status.lastDurationMs !== null && status.lastDurationMs > 250 ? <Chip size="small" variant="outlined" label={`${(status.lastDurationMs / 1000).toFixed(2)} s batch`} /> : null}
                   </Stack>
-                </Box>
-                <Stack direction="row" useFlexGap sx={{ flexWrap: 'wrap', gap: 0.5, alignItems: 'center', justifyContent: { md: 'flex-end' } }}>
-                  <Chip size="small" label={`${rows.length.toLocaleString()} loaded`} />
-                  {exactR === undefined ? <Chip size="small" variant="outlined" label={status.lastCompletedR ? `through r=${status.lastCompletedR}` : 'starting r=2'} /> : null}
-                  {exactR !== undefined && status.exactDone ? <Chip size="small" variant="outlined" label="r complete" /> : null}
-                  {status.computing ? <Chip size="small" color="primary" label="generating…" /> : null}
-                  {status.cacheHits ? <Chip size="small" variant="outlined" label={`${status.cacheHits} cached`} /> : null}
-                  {status.lastDurationMs !== null && status.lastDurationMs > 250 ? <Chip size="small" variant="outlined" label={`${(status.lastDurationMs / 1000).toFixed(2)} s batch`} /> : null}
                 </Stack>
-              </Stack>
-            </Box>
-            {status.error ? <Alert severity="error">{status.error}</Alert> : null}
-            <VirtualTable rows={rows} selected={selected} onSelect={setSelected} onNeedMore={requestMore} />
-          </Paper>
+              </Box>
+              {status.error ? <Alert severity="error">{status.error}</Alert> : null}
+              <VirtualTable rows={rows} selected={selected} onSelect={setSelected} onNeedMore={requestMore} />
+            </Paper>
 
-          <Stack spacing={1.5} sx={{ minHeight: 0, overflowY: { lg: 'auto' } }}>
-            <Card variant="outlined"><CardContent>
-              <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Selected group</Typography>
-              {selected ? <Stack spacing={1} sx={{ mt: 1 }}>
-                <Paper variant="outlined" sx={{ p: 1.2, bgcolor: 'action.hover' }}><GroupNotation row={selected} /></Paper>
-                <Typography variant="caption" color="text.secondary">d={selected.d}, r={selected.r}; n,m,k=({selected.n},{selected.m},{selected.k}); a,b,c=({selected.a},{selected.b},{selected.c})</Typography>
-                <Stack direction="row" spacing={1}>
-                  <Button variant="outlined" disabled={selectedIndex <= 0} onClick={() => selectOffset(-1)} fullWidth>Previous</Button>
-                  <Button variant="outlined" disabled={selectedIndex < 0 || selectedIndex >= rows.length - 1} onClick={() => selectOffset(1)} fullWidth>Next</Button>
-                </Stack>
-              </Stack> : <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>Click a row or use direct selection.</Typography>}
-            </CardContent></Card>
+            <Stack spacing={1.5} sx={{ minHeight: 0, height: { lg: '100%' }, overflowY: { lg: 'auto' } }}>
+              <Card variant="outlined"><CardContent>
+                <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Selected group</Typography>
+                {selected ? <Stack spacing={1} sx={{ mt: 1 }}>
+                  <Paper variant="outlined" sx={{ p: 1.2, bgcolor: 'action.hover' }}><GroupNotation row={selected} /></Paper>
+                  <Typography variant="caption" color="text.secondary">d={selected.d}, r={selected.r}; n,m,k=({selected.n},{selected.m},{selected.k}); a,b,c=({selected.a},{selected.b},{selected.c})</Typography>
+                  <Stack direction="row" spacing={1}>
+                    <Button variant="outlined" disabled={selectedIndex <= 0} onClick={() => selectOffset(-1)} fullWidth>Previous</Button>
+                    <Button variant="outlined" disabled={selectedIndex < 0 || selectedIndex >= rows.length - 1} onClick={() => selectOffset(1)} fullWidth>Next</Button>
+                  </Stack>
+                </Stack> : <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>Click a row or use direct selection.</Typography>}
+              </CardContent></Card>
 
+              <DirectSelector onOpen={openDirect} />
+              <Typography variant="caption" color="text.secondary" sx={{ px: 0.5, pb: 1 }}>Enumeration runs entirely in your browser and caches locally.</Typography>
+            </Stack>
+          </Box>
+
+          <Box sx={{ minWidth: 0 }}>
             <AsetsPanel selected={selected} />
-            <DirectSelector onOpen={openDirect} />
-            <Typography variant="caption" color="text.secondary" sx={{ px: 0.5, pb: 1 }}>Enumeration and Aset computation run entirely in your browser and cache locally.</Typography>
-          </Stack>
+          </Box>
         </Box>
       </Box>
     </>
