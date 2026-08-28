@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { LegacyViewerData } from './asetsLegacyAdapter';
 
 // Keep the embedded legacy visualizer isolated from the generated-data engine.
+// Preview review branch intentionally preserves the validated runtime behavior.
 const VIEWER_MESSAGE = 'knockout-asets-viewer-data';
 const READY_MESSAGE = 'knockout-asets-viewer-ready';
 
