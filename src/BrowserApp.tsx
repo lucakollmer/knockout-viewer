@@ -10,6 +10,7 @@ import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
+import AsetsPanel from './AsetsPanel';
 import { emptyDirectValues, resolveDirectValues, type DirectField, type DirectValues } from './directInput';
 import type { GroupRow } from './groupMath';
 
@@ -418,8 +419,9 @@ export default function BrowserApp() {
               </Stack> : <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>Click a row or use direct selection.</Typography>}
             </CardContent></Card>
 
+            <AsetsPanel selected={selected} />
             <DirectSelector onOpen={openDirect} />
-            <Typography variant="caption" color="text.secondary" sx={{ px: 0.5, pb: 1 }}>Enumeration runs entirely in your browser. Generated (d,r) batches are cached locally.</Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ px: 0.5, pb: 1 }}>Enumeration and Aset computation run entirely in your browser and cache locally.</Typography>
           </Stack>
         </Box>
       </Box>
