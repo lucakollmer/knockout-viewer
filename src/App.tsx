@@ -7,31 +7,38 @@ export default function App() {
       sx={{
         minHeight: '100dvh',
         overflowX: 'hidden',
-        '& main > .MuiPaper-root': {
-          boxSizing: 'border-box',
-          height: 'clamp(360px, calc(100dvh - 150px), 720px)',
-          minHeight: '360px !important',
-          maxHeight: 1000,
-          resize: 'vertical',
+        '& main > .MuiBox-root:first-child': {
+          gap: 0,
+          border: 1,
+          borderColor: 'divider',
+          borderRadius: 1,
           overflow: 'hidden',
-          alignSelf: 'start',
+          bgcolor: 'background.paper',
         },
-        '& main > .MuiStack-root': {
-          minHeight: 0,
-          overflowY: 'auto',
-          overscrollBehavior: 'contain',
-          scrollbarGutter: 'stable',
+        '& main > .MuiBox-root:first-child > .MuiPaper-root': {
+          border: 0,
+          borderRadius: 0,
+          boxShadow: 'none',
         },
-        '& main > .MuiStack-root > *': {
-          flexShrink: 0,
+        '& main > .MuiBox-root:first-child > .MuiPaper-root + .MuiPaper-root': {
+          borderTop: 1,
+          borderColor: 'divider',
         },
-        '@media (max-height: 720px)': {
-          '& main': {
-            height: 'auto',
-            minHeight: 'calc(100dvh - 86px)',
+        '@media (min-width: 1200px)': {
+          '& main > .MuiBox-root:first-child > .MuiPaper-root + .MuiPaper-root': {
+            borderTop: 0,
+            borderLeft: 1,
+            borderColor: 'divider',
           },
-          '& main > .MuiStack-root': {
-            overflowY: 'visible',
+        },
+        '@media (min-width: 1536px)': {
+          '& main': {
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+            alignItems: 'start',
+          },
+          '& main > .MuiBox-root': {
+            minWidth: 0,
           },
         },
       }}

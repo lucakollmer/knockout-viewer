@@ -6,7 +6,7 @@
 <title>Knockout ASets Viewer v0.3.10 — browser-generated A-sets</title>
 <link rel="stylesheet" href="/asets-viewer-v0.3.10-embedded.css">
 </head>
-<body class="embedded-viewer">
+<body class="embedded-viewer" data-view-mode="projection">
 <header>
 <h1>ASets Viewer v0.3.10 — globally canonical C-largest order</h1>
 <form class="query" id="queryForm">
@@ -29,7 +29,7 @@
 <span id="lookupStatus" class="help"></span>
 </header>
 <main>
-<section class="panel wide"><div class="meta" id="meta">Enter a group.</div></section>
+<section class="panel wide" id="metaPanel"><div class="meta" id="meta">Enter a group.</div></section>
 <section class="panel wide" id="databaseBrowserPanel">
 <div class="panel-head"><h2>Database browser</h2><span id="dbBrowserStatus" class="db-browser-status">loading…</span></div>
 <div class="db-browser">
@@ -37,7 +37,7 @@
 <div class="db-group-pane"><div class="db-group-toolbar"><span id="dbGroupHeading">Canonical groups</span><span class="help">ordered by r, then (k, m, n, a, b, c) · normal browser wheel/scrollbar</span></div><select id="dbGroupList" class="db-group-list" size="18" aria-label="Choose canonical group"></select></div>
 </div>
 </section>
-<section class="panel">
+<section class="panel viewer-panel" id="projectionPanel">
 <div class="panel-head"><h2>Junior simplex — radial projection</h2><div class="toolbar">
 <label><input type="checkbox" id="projCoords"> coordinates</label>
 <label><input type="checkbox" id="projColor"> colour by age</label>
@@ -46,7 +46,7 @@
 <div class="plot-wrap"><svg id="projSvg" viewBox="0 0 800 540"></svg><div id="projLegend" class="legend hidden"></div></div>
 <div class="meta">Drag to pan and wheel to zoom. Ages and coordinate labels remain a fixed screen size while geometry magnifies. C, D, E are the three positive presentation blocks. Their residues may coincide or be 0; n, m, k are always at least 1.</div>
 </section>
-<section class="panel">
+<section class="panel viewer-panel" id="rawPanel">
 <div class="panel-head"><h2>Raw 3D cone complex</h2><div class="toolbar">
 <label>tool <select id="rawTool"><option value="rotate" selected>Rotate view</option><option value="move">Move view</option></select></label>
 <label><input type="checkbox" id="rawCoords"> coordinates</label>
@@ -57,7 +57,7 @@
 <div class="plot-wrap"><canvas id="rawCanvas"></canvas><div id="rawLegend" class="legend hidden"></div></div>
 <div class="meta">GeoGebra-style controls: in Rotate view mode, left-drag rotates; in Move view mode, left-drag pans; right-drag always rotates; Shift-drag or middle-drag pans; wheel zooms; double-click resets. C is kept as the screen-up direction. The reset view has C vertical, D lower-left, E lower-right when all three blocks exist. Each stored geometric A-set is filled directly as its own transparent 3D polygon.</div>
 </section>
-<section class="panel wide">
+<section class="panel viewer-panel" id="monomialPanel">
 <div class="panel-head"><h2>Collapsed monomial A-sets</h2><div class="toolbar">
 <select id="asetSelect"></select>
 <label><input type="checkbox" id="monoAges" checked> ages</label>
