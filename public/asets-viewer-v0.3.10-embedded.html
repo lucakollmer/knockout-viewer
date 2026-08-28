@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Knockout ASets Viewer v0.3.10 — browser-generated A-sets</title>
+<link rel="stylesheet" href="/asets-viewer-v0.3.10-embedded.css">
+</head>
+<body class="embedded-viewer">
+<header>
+<h1>ASets Viewer v0.3.10 — globally canonical C-largest order</h1>
+<form class="query" id="queryForm">
+<label>d<input id="d" type="number" min="3" max="12" value="3"></label>
+<label>r<input id="r" type="number" min="2" max="50" value="2"></label>
+<label>n<input id="n" type="number" min="1" value="1"></label>
+<label>m<input id="m" type="number" min="1" value="1"></label>
+<label>k<input id="k" type="number" min="1" value="1"></label>
+<label>a<input id="a" type="number" value="0"></label>
+<label>b<input id="b" type="number" value="1"></label>
+<label>c<input id="c" type="number" value="1"></label>
+<button class="primary" type="submit">Find A-sets</button>
+</form>
+<div class="sep"></div>
+<div class="nav">
+<button id="prevGroup" type="button">← Previous</button><button id="nextGroup" type="button">Next →</button>
+<label>group # for d<input id="nGroupIndex" type="number" min="1" value="1"></label><button id="jumpIndex" type="button">Go</button>
+<span id="groupOrdinal" class="nav-status"></span>
+</div>
+<span id="lookupStatus" class="help"></span>
+</header>
+<main>
+<section class="panel wide"><div class="meta" id="meta">Enter a group.</div></section>
+<section class="panel wide" id="databaseBrowserPanel">
+<div class="panel-head"><h2>Database browser</h2><span id="dbBrowserStatus" class="db-browser-status">loading…</span></div>
+<div class="db-browser">
+<div class="db-n-pane"><div class="db-pane-title">Choose d</div><select id="dbNList" class="db-n-list" size="11" aria-label="Choose n"></select></div>
+<div class="db-group-pane"><div class="db-group-toolbar"><span id="dbGroupHeading">Canonical groups</span><span class="help">ordered by r, then (k, m, n, a, b, c) · normal browser wheel/scrollbar</span></div><select id="dbGroupList" class="db-group-list" size="18" aria-label="Choose canonical group"></select></div>
+</div>
+</section>
+<section class="panel">
+<div class="panel-head"><h2>Junior simplex — radial projection</h2><div class="toolbar">
+<label><input type="checkbox" id="projCoords"> coordinates</label>
+<label><input type="checkbox" id="projColor"> colour by age</label>
+<label class="text-size">text <input id="projTextSize" type="range" min="8" max="30" value="14"><output id="projTextValue">14</output>px</label>
+<button id="projReset">Reset view</button></div></div>
+<div class="plot-wrap"><svg id="projSvg" viewBox="0 0 800 540"></svg><div id="projLegend" class="legend hidden"></div></div>
+<div class="meta">Drag to pan and wheel to zoom. Ages and coordinate labels remain a fixed screen size while geometry magnifies. C, D, E are the three positive presentation blocks. Their residues may coincide or be 0; n, m, k are always at least 1.</div>
+</section>
+<section class="panel">
+<div class="panel-head"><h2>Raw 3D cone complex</h2><div class="toolbar">
+<label>tool <select id="rawTool"><option value="rotate" selected>Rotate view</option><option value="move">Move view</option></select></label>
+<label><input type="checkbox" id="rawCoords"> coordinates</label>
+<label><input type="checkbox" id="rawColor"> colour by age</label>
+<label><input type="checkbox" id="rawSurface" checked> transparent A-set polygons</label>
+<label class="text-size">text <input id="rawTextSize" type="range" min="8" max="30" value="14"><output id="rawTextValue">14</output>px</label>
+<button id="rawReset">Reset camera</button></div></div>
+<div class="plot-wrap"><canvas id="rawCanvas"></canvas><div id="rawLegend" class="legend hidden"></div></div>
+<div class="meta">GeoGebra-style controls: in Rotate view mode, left-drag rotates; in Move view mode, left-drag pans; right-drag always rotates; Shift-drag or middle-drag pans; wheel zooms; double-click resets. C is kept as the screen-up direction. The reset view has C vertical, D lower-left, E lower-right when all three blocks exist. Each stored geometric A-set is filled directly as its own transparent 3D polygon.</div>
+</section>
+<section class="panel wide">
+<div class="panel-head"><h2>Collapsed monomial A-sets</h2><div class="toolbar">
+<select id="asetSelect"></select>
+<label><input type="checkbox" id="monoAges" checked> ages</label>
+<label><input type="checkbox" id="monoCoords" checked> coordinates</label>
+<label><input type="checkbox" id="monoColor"> colour by age</label>
+<label class="text-size">text <input id="monoTextSize" type="range" min="8" max="30" value="12"><output id="monoTextValue">12</output>px</label>
+<button id="monoReset">Reset view</button></div></div>
+<div class="meta" id="asetMeta">No A-set selected.</div>
+<div class="plot-wrap small"><svg id="monoSvg" viewBox="0 0 1100 500"></svg><div id="monoLegend" class="legend hidden"></div></div>
+</section>
+</main>
+<script src="/asets-viewer-v0.3.10-embedded-a.js"></script>
+<script src="/asets-viewer-v0.3.10-embedded-b.js"></script>
+</body></html>
