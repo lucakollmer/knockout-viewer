@@ -8,7 +8,7 @@
     "dev": "vite",
     "test": "vitest run",
     "typecheck": "tsc -b",
-    "build": "node scripts/readback-check.mjs",
+    "build": "npm run test && npm run typecheck && node scripts/write-deployment.mjs && vite build && node scripts/readback-name.mjs",
     "deploy": "node scripts/deploy-benchmark-readback.mjs"
   },
   "dependencies": {
