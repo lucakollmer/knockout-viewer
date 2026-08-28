@@ -1,5 +1,6 @@
 const KEY_PREFIX = 'knockout:';
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
+const CACHE_CONTROL = 'public, max-age=60, s-maxage=300, stale-while-revalidate=60';
 
 function json(data, status = 200) {
   return new Response(`${JSON.stringify(data)}\n`, {
@@ -34,6 +35,24 @@ async function storedBenchmark(env, requestedSha) {
   return { record, serialized };
 }
 
+function cacheableResponse(request, stored, requestedSha) {
+  const validator = String(stored.record?.benchmark_record_id || stored.record?.run_id || requestedSha)
+    .replace(/[^A-Za-z0-9._-]/g, '');
+  const etag = `\"${validator}\"`;
+  const headers = {
+    etag,
+    'cache-control': CACHE_CONTROL,
+    'cdn-cache-control': 'public, max-age=300',
+  };
+  if (request.headers.get('if-none-match') === etag) return new Response(null, { status: 304, headers });
+  return new Response(`${stored.serialized}\n`, {
+    headers: {
+      ...headers,
+      'content-type': 'application/json; charset=utf-8',
+    },
+  });
+}
+
 async function readBenchmark(request, env) {
   if (request.method !== 'GET') return json({ ok: false, error: 'method_not_allowed' }, 405);
   const url = new URL(request.url);
@@ -43,6 +62,7 @@ async function readBenchmark(request, env) {
   }
   const stored = await storedBenchmark(env, requestedSha);
   if (stored.response) return stored.response;
+  if (requestedSha) return cacheableResponse(request, stored, requestedSha);
   return new Response(`${stored.serialized}\n`, {
     headers: {
       'content-type': 'application/json; charset=utf-8',
@@ -56,29 +76,7 @@ async function readCacheableBenchmark(request, env, requestedSha) {
   if (!SHA_PATTERN.test(requestedSha)) return json({ ok: false, error: 'invalid_sha' }, 400);
   const stored = await storedBenchmark(env, requestedSha);
   if (stored.response) return stored.response;
-
-  const validator = String(stored.record?.benchmark_record_id || stored.record?.run_id || requestedSha)
-    .replace(/[^A-Za-z0-9._-]/g, '');
-  const etag = `\"${validator}\"`;
-  if (request.headers.get('if-none-match') === etag) {
-    return new Response(null, {
-      status: 304,
-      headers: {
-        etag,
-        'cache-control': 'public, max-age=60, s-maxage=300, stale-while-revalidate=60',
-        'cdn-cache-control': 'public, max-age=300',
-      },
-    });
-  }
-
-  return new Response(`${stored.serialized}\n`, {
-    headers: {
-      'content-type': 'application/json; charset=utf-8',
-      'cache-control': 'public, max-age=60, s-maxage=300, stale-while-revalidate=60',
-      'cdn-cache-control': 'public, max-age=300',
-      etag,
-    },
-  });
+  return cacheableResponse(request, stored, requestedSha);
 }
 
 export default {
