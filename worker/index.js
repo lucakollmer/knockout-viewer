@@ -39,9 +39,23 @@ function validateBenchmark(payload) {
   for (const scenario of scenarios) if (!validScenario(scenario)) throw new Error(`Invalid benchmark scenario ${scenario?.id ?? '?'}.`);
 }
 
+function assetsBinding(env) {
+  const assets = env?.ASSETS;
+  if (!assets || typeof assets.fetch !== 'function') throw new Error('ASSETS binding is unavailable');
+  return assets;
+}
+
+function benchmarkBinding(env) {
+  const benchmarks = env?.BENCHMARKS;
+  if (!benchmarks || typeof benchmarks.get !== 'function' || typeof benchmarks.put !== 'function') {
+    throw new Error('BENCHMARKS KV binding is unavailable');
+  }
+  return benchmarks;
+}
+
 async function deploymentMarker(request, env) {
   const markerUrl = new URL('/deployment.json', request.url);
-  const response = await env.ASSETS.fetch(new Request(markerUrl, { method: 'GET' }));
+  const response = await assetsBinding(env).fetch(new Request(markerUrl, { method: 'GET' }));
   if (!response.ok) throw new Error(`deployment marker HTTP ${response.status}`);
   const marker = await response.json();
   if (!marker?.sha || typeof marker.sha !== 'string') throw new Error('deployment marker is missing sha');
@@ -70,10 +84,12 @@ async function storeBenchmark(request, env) {
   }
 
   let deployment;
+  let benchmarks;
   try {
     deployment = await deploymentMarker(request, env);
+    benchmarks = benchmarkBinding(env);
   } catch (error) {
-    return json({ ok: false, error: 'deployment_marker_unavailable', detail: String(error?.message || error) }, 503);
+    return json({ ok: false, error: 'benchmark_backend_unavailable', detail: String(error?.message || error) }, 503);
   }
 
   const receivedAt = new Date().toISOString();
@@ -81,23 +97,34 @@ async function storeBenchmark(request, env) {
   const record = { ...payload, deployment, server_received_at: receivedAt, benchmark_record_id: id };
   const serialized = JSON.stringify(record);
   const timestamp = Date.now();
-  await Promise.all([
-    env.BENCHMARKS.put(`${KEY_PREFIX}run:${deployment.sha}:${timestamp}:${id}`, serialized, { expirationTtl: BENCHMARK_TTL_SECONDS }),
-    env.BENCHMARKS.put(`${KEY_PREFIX}latest:${deployment.sha}`, serialized, { expirationTtl: BENCHMARK_TTL_SECONDS }),
-    env.BENCHMARKS.put(`${KEY_PREFIX}latest`, serialized, { expirationTtl: BENCHMARK_TTL_SECONDS }),
-  ]);
+  try {
+    await Promise.all([
+      benchmarks.put(`${KEY_PREFIX}run:${deployment.sha}:${timestamp}:${id}`, serialized, { expirationTtl: BENCHMARK_TTL_SECONDS }),
+      benchmarks.put(`${KEY_PREFIX}latest:${deployment.sha}`, serialized, { expirationTtl: BENCHMARK_TTL_SECONDS }),
+      benchmarks.put(`${KEY_PREFIX}latest`, serialized, { expirationTtl: BENCHMARK_TTL_SECONDS }),
+    ]);
+  } catch (error) {
+    return json({ ok: false, error: 'benchmark_storage_failed', detail: String(error?.message || error) }, 503);
+  }
   return json({ ok: true, id, sha: deployment.sha, schema: payload.schema, received_at: receivedAt });
 }
 
 async function readLatest(request, env) {
   if (request.method !== 'GET') return json({ ok: false, error: 'method_not_allowed' }, 405);
   let deployment;
+  let benchmarks;
   try {
     deployment = await deploymentMarker(request, env);
+    benchmarks = benchmarkBinding(env);
   } catch (error) {
-    return json({ ok: false, error: 'deployment_marker_unavailable', detail: String(error?.message || error) }, 503);
+    return json({ ok: false, error: 'benchmark_backend_unavailable', detail: String(error?.message || error) }, 503);
   }
-  const serialized = await env.BENCHMARKS.get(`${KEY_PREFIX}latest:${deployment.sha}`);
+  let serialized;
+  try {
+    serialized = await benchmarks.get(`${KEY_PREFIX}latest:${deployment.sha}`);
+  } catch (error) {
+    return json({ ok: false, error: 'benchmark_storage_failed', detail: String(error?.message || error) }, 503);
+  }
   if (!serialized) return json({ ok: false, error: 'benchmark_not_found', sha: deployment.sha }, 404);
   return new Response(`${serialized}\n`, { headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 }
@@ -105,8 +132,12 @@ async function readLatest(request, env) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname === '/api/benchmarks') return storeBenchmark(request, env);
-    if (url.pathname === '/api/benchmarks/latest') return readLatest(request, env);
-    return env.ASSETS.fetch(request);
+    try {
+      if (url.pathname === '/api/benchmarks') return await storeBenchmark(request, env);
+      if (url.pathname === '/api/benchmarks/latest') return await readLatest(request, env);
+      return await assetsBinding(env).fetch(request);
+    } catch (error) {
+      return json({ ok: false, error: 'worker_runtime_error', detail: String(error?.message || error) }, 500);
+    }
   },
 };
