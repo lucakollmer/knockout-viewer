@@ -279,7 +279,22 @@ export default function BrowserApp() {
   const [exactR, setExactR] = useState<number | undefined>();
   const [modulusText, setModulusText] = useState('');
   const [selected, setSelected] = useState<GroupRow | null>(null);
+  const [navigatorHeight, setNavigatorHeight] = useState<number | null>(null);
+  const navigatorPaperRef = useRef<HTMLDivElement | null>(null);
   const { rows, status, requestMore } = useGroupNavigator(dimension, exactR);
+
+  useEffect(() => {
+    const element = navigatorPaperRef.current;
+    if (!element) return;
+    const syncHeight = () => {
+      const next = Math.round(element.getBoundingClientRect().height);
+      setNavigatorHeight((previous) => previous === next ? previous : next);
+    };
+    syncHeight();
+    const observer = new ResizeObserver(syncHeight);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   const updateDimension = (value: string) => {
     setDimensionText(value);
@@ -365,11 +380,24 @@ export default function BrowserApp() {
               display: 'grid',
               gridTemplateColumns: { xs: '1fr', lg: 'minmax(0,1fr) 390px' },
               gap: 2,
-              height: { lg: 'calc(100vh - 126px)' },
               minHeight: 0,
+              alignItems: 'start',
             }}
           >
-            <Paper variant="outlined" sx={{ minHeight: { xs: 560, lg: 0 }, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <Paper
+              ref={navigatorPaperRef}
+              variant="outlined"
+              sx={{
+                boxSizing: 'border-box',
+                height: { xs: 'auto', lg: 'clamp(360px, calc(100dvh - 150px), 720px)' },
+                minHeight: { xs: 560, lg: 360 },
+                maxHeight: { lg: 1000 },
+                resize: { xs: 'none', lg: 'vertical' },
+                overflow: 'hidden',
+                display: 'flex',
+                flexDirection: 'column',
+              }}
+            >
               <Box sx={{ px: 1.5, py: 1, borderBottom: 1, borderColor: 'divider' }}>
                 <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} sx={{ justifyContent: 'space-between', alignItems: { md: 'flex-end' } }}>
                   <Box>
@@ -415,22 +443,47 @@ export default function BrowserApp() {
               <VirtualTable rows={rows} selected={selected} onSelect={setSelected} onNeedMore={requestMore} />
             </Paper>
 
-            <Stack spacing={1.5} sx={{ minHeight: 0, height: { lg: '100%' }, overflowY: { lg: 'auto' } }}>
-              <Card variant="outlined"><CardContent>
-                <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Selected group</Typography>
-                {selected ? <Stack spacing={1} sx={{ mt: 1 }}>
-                  <Paper variant="outlined" sx={{ p: 1.2, bgcolor: 'action.hover' }}><GroupNotation row={selected} /></Paper>
-                  <Typography variant="caption" color="text.secondary">d={selected.d}, r={selected.r}; n,m,k=({selected.n},{selected.m},{selected.k}); a,b,c=({selected.a},{selected.b},{selected.c})</Typography>
-                  <Stack direction="row" spacing={1}>
-                    <Button variant="outlined" disabled={selectedIndex <= 0} onClick={() => selectOffset(-1)} fullWidth>Previous</Button>
-                    <Button variant="outlined" disabled={selectedIndex < 0 || selectedIndex >= rows.length - 1} onClick={() => selectOffset(1)} fullWidth>Next</Button>
-                  </Stack>
-                </Stack> : <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>Click a row or use direct selection.</Typography>}
-              </CardContent></Card>
+            <Paper
+              variant="outlined"
+              sx={{
+                minHeight: 0,
+                height: { xs: 'auto', lg: navigatorHeight === null ? 'clamp(360px, calc(100dvh - 150px), 720px)' : `${navigatorHeight}px` },
+                overflowY: { lg: 'auto' },
+                overscrollBehavior: 'contain',
+                scrollbarGutter: 'stable',
+              }}
+            >
+              <Stack
+                spacing={0}
+                sx={{
+                  '& > .MuiCard-root': {
+                    border: 0,
+                    borderRadius: 0,
+                    boxShadow: 'none',
+                    flexShrink: 0,
+                  },
+                  '& > .MuiCard-root + .MuiCard-root': {
+                    borderTop: 1,
+                    borderColor: 'divider',
+                  },
+                }}
+              >
+                <Card variant="outlined"><CardContent>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Selected group</Typography>
+                  {selected ? <Stack spacing={1} sx={{ mt: 1 }}>
+                    <Paper variant="outlined" sx={{ p: 1.2, bgcolor: 'action.hover' }}><GroupNotation row={selected} /></Paper>
+                    <Typography variant="caption" color="text.secondary">d={selected.d}, r={selected.r}; n,m,k=({selected.n},{selected.m},{selected.k}); a,b,c=({selected.a},{selected.b},{selected.c})</Typography>
+                    <Stack direction="row" spacing={1}>
+                      <Button variant="outlined" disabled={selectedIndex <= 0} onClick={() => selectOffset(-1)} fullWidth>Previous</Button>
+                      <Button variant="outlined" disabled={selectedIndex < 0 || selectedIndex >= rows.length - 1} onClick={() => selectOffset(1)} fullWidth>Next</Button>
+                    </Stack>
+                  </Stack> : <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>Click a row or use direct selection.</Typography>}
+                </CardContent></Card>
 
-              <DirectSelector onOpen={openDirect} />
-              <Typography variant="caption" color="text.secondary" sx={{ px: 0.5, pb: 1 }}>Enumeration runs entirely in your browser and caches locally.</Typography>
-            </Stack>
+                <DirectSelector onOpen={openDirect} />
+                <Typography variant="caption" color="text.secondary" sx={{ px: 2, py: 1.25, borderTop: 1, borderColor: 'divider' }}>Enumeration runs entirely in your browser and caches locally.</Typography>
+              </Stack>
+            </Paper>
           </Box>
 
           <Box sx={{ minWidth: 0 }}>
