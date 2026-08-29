@@ -1,0 +1,94 @@
+{
+  "mirror_schema": "knockout-asets.github-benchmark-mirror/v1",
+  "payload": {
+    "benchmark": {
+      "benchmark_kind": "fixed-v2-contract-fixture",
+      "harness_version": 2,
+      "scenarios": [
+        {
+          "id": "cold-r50",
+          "performance": {
+            "candidateCspEnumerationMs": 6,
+            "geometryMs": 17,
+            "totalWorkerComputeMs": 38
+          },
+          "r": 50,
+          "wall_ms": 82
+        },
+        {
+          "id": "cold-r100",
+          "performance": {
+            "candidateCspEnumerationMs": 21,
+            "geometryMs": 128,
+            "totalWorkerComputeMs": 166
+          },
+          "r": 100,
+          "wall_ms": 233
+        },
+        {
+          "id": "cold-r150",
+          "performance": {
+            "candidateCspEnumerationMs": 56,
+            "geometryMs": 540,
+            "totalWorkerComputeMs": 628
+          },
+          "r": 150,
+          "wall_ms": 730
+        },
+        {
+          "id": "cold-r200",
+          "performance": {
+            "candidateCspEnumerationMs": 151,
+            "geometryMs": 1586,
+            "totalWorkerComputeMs": 1814
+          },
+          "r": 200,
+          "wall_ms": 2053
+        },
+        {
+          "id": "warm-r200",
+          "performance": {
+            "geometryMs": 1093
+          },
+          "r": 200,
+          "wall_ms": 1417
+        },
+        {
+          "first_chunk_ms": 330,
+          "first_message_ms": 235,
+          "id": "cache-r200",
+          "performance": {
+            "indexedDbReadMs": 93
+          },
+          "r": 200,
+          "wall_ms": 391
+        },
+        {
+          "cancel_after_ms": 250,
+          "id": "cancel-r400",
+          "main_thread_delay_max_ms": 1,
+          "main_thread_delay_p95_ms": 1,
+          "r": 400,
+          "records_received": 128
+        }
+      ],
+      "suite": "interactive-asets-v1"
+    },
+    "client": {
+      "hardware_concurrency": 2,
+      "user_agent": "Mozilla/5.0 Firefox/154 Windows 10"
+    },
+    "completed_at": "2026-08-28T12:00:10Z",
+    "deployment": {
+      "sha": "705da25308a0d12c4c936a580864e5cbe5e5c253"
+    },
+    "run_id": "contract-test-browser-v2-001",
+    "schema": "knockout-asets.benchmark/v1",
+    "started_at": "2026-08-28T12:00:00Z"
+  },
+  "source": {
+    "benchmark_schema": "knockout-asets.benchmark/v1",
+    "deployment_sha": "705da25308a0d12c4c936a580864e5cbe5e5c253",
+    "run_id": "contract-test-browser-v2-001"
+  }
+}
