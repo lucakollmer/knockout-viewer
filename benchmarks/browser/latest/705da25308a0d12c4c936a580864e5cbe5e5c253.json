@@ -43,7 +43,7 @@
             "totalWorkerComputeMs": 1814
           },
           "r": 200,
-          "wall_ms": 2053
+          "wall_ms": 1999
         },
         {
           "id": "warm-r200",
@@ -78,17 +78,17 @@
       "hardware_concurrency": 2,
       "user_agent": "Mozilla/5.0 Firefox/154 Windows 10"
     },
-    "completed_at": "2026-08-28T12:00:10Z",
+    "completed_at": "2026-08-28T12:01:10Z",
     "deployment": {
       "sha": "705da25308a0d12c4c936a580864e5cbe5e5c253"
     },
-    "run_id": "contract-test-browser-v2-001",
+    "run_id": "contract-test-browser-v2-002",
     "schema": "knockout-asets.benchmark/v1",
     "started_at": "2026-08-28T12:00:00Z"
   },
   "source": {
     "benchmark_schema": "knockout-asets.benchmark/v1",
     "deployment_sha": "705da25308a0d12c4c936a580864e5cbe5e5c253",
-    "run_id": "contract-test-browser-v2-001"
+    "run_id": "contract-test-browser-v2-002"
   }
 }
