@@ -4,6 +4,7 @@ import {
   compareDownsets,
   effectiveFamily,
   familyPayloadJson,
+  geometryRecord,
   type FamilyResult,
   type Point,
 } from '../src/asetsCore';
@@ -42,6 +43,20 @@ describe('interactive optimized Asets path', () => {
     const result = computeInteractive(50, [1, 24, 49]);
     expect(result.records).toHaveLength(386);
     expect(digest(result)).toBe('713db807af7888ffe80f13f408bfa3e55912e8a94770a1d6fa1abd2a210546d5');
+  });
+
+  it('matches reference geometry in raw CSP emission order', () => {
+    const r = 50;
+    const residues: Point = [1, 24, 49];
+    const modulusContext = buildFastModulusContext(r);
+    const geometryContext = createFamilyGeometryContext(r, residues);
+    let checked = 0;
+    for (const downset of iterFastDownsets(r, residues, { modulusContext })) {
+      expect(geometryRecordCached(downset, residues, r, geometryContext)).toEqual(geometryRecord(downset, residues, r));
+      checked += 1;
+      if (checked === 100) break;
+    }
+    expect(checked).toBe(100);
   });
 
   it('concatenates deterministic root partitions into the exact single-thread order', () => {
