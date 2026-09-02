@@ -164,6 +164,7 @@ export function* iterFastDownsets(
   const assigned = new Uint32Array(r);
   assigned[0] = 1;
   let assignedCount = 1;
+  const undoStack: number[] = [];
 
   const compatible = (candidate: FastCandidate): boolean => {
     if (options.metrics) options.metrics.compatibilityChecks += 1;
@@ -176,23 +177,25 @@ export function* iterFastDownsets(
     return true;
   };
 
-  const apply = (candidate: FastCandidate): number[] => {
-    const added: number[] = [];
+  const apply = (candidate: FastCandidate): void => {
     const assignments = candidate.assignments;
     for (let index = 0; index < assignments.length; index += 2) {
       const chi = assignments[index];
       if (assigned[chi] === 0) {
         assigned[chi] = assignments[index + 1];
-        added.push(chi);
+        undoStack.push(chi);
+        assignedCount += 1;
       }
     }
-    assignedCount += added.length;
-    return added;
   };
 
-  const undo = (added: readonly number[]): void => {
-    for (const chi of added) assigned[chi] = 0;
-    assignedCount -= added.length;
+  const undoTo = (mark: number): void => {
+    while (undoStack.length > mark) {
+      const chi = undoStack.pop();
+      if (chi === undefined) throw new Error('internal fast CSP undo failure');
+      assigned[chi] = 0;
+      assignedCount -= 1;
+    }
   };
 
   const emit = (): readonly Point[] => {
@@ -208,7 +211,7 @@ export function* iterFastDownsets(
   function* search(): Generator<readonly Point[]> {
     if (options.metrics) options.metrics.nodes += 1;
     maybeCancel(options.cancelCheck);
-    const propagated: number[][] = [];
+    const frameMark = undoStack.length;
     try {
       while (true) {
         if (assignedCount === r) {
@@ -218,45 +221,54 @@ export function* iterFastDownsets(
 
         let bestCharacter = -1;
         let bestDomain: FastCandidate[] | null = null;
+        let scratchDomain: FastCandidate[] = [];
         for (let chi = 1; chi < r; chi += 1) {
           if (assigned[chi] !== 0) continue;
-          const domain: FastCandidate[] = [];
+          scratchDomain.length = 0;
+          let cutOff = false;
           for (const candidate of candidates[chi]) {
-            if (compatible(candidate)) domain.push(candidate);
+            if (!compatible(candidate)) continue;
+            scratchDomain.push(candidate);
+            // Characters are visited in ascending order, so an equal-sized later
+            // domain cannot win the deterministic MRV tie-break. Stop as soon as
+            // it is known not to beat the current best domain.
+            if (bestDomain !== null && scratchDomain.length >= bestDomain.length) {
+              cutOff = true;
+              break;
+            }
           }
-          if (domain.length === 0) return;
-          if (
-            bestDomain === null
-            || domain.length < bestDomain.length
-            || (domain.length === bestDomain.length && chi < bestCharacter)
-          ) {
+          if (!cutOff && scratchDomain.length === 0) return;
+          if (cutOff) continue;
+          if (bestDomain === null || scratchDomain.length < bestDomain.length) {
             bestCharacter = chi;
-            bestDomain = domain;
+            const previousBest = bestDomain;
+            bestDomain = scratchDomain;
+            scratchDomain = previousBest ?? [];
           }
-          if (domain.length === 1) break;
+          if (bestDomain.length === 1) break;
         }
 
-        if (bestDomain === null) throw new Error('internal fast CSP domain failure');
+        if (bestDomain === null || bestCharacter < 0) throw new Error('internal fast CSP domain failure');
         if (bestDomain.length === 1) {
-          const added = apply(bestDomain[0]);
-          propagated.push(added);
+          apply(bestDomain[0]);
           if (options.metrics) options.metrics.singletonPropagations += 1;
           continue;
         }
 
         if (options.metrics) options.metrics.branches += 1;
         for (const candidate of bestDomain) {
-          const added = apply(candidate);
+          const branchMark = undoStack.length;
+          apply(candidate);
           try {
             yield* search();
           } finally {
-            undo(added);
+            undoTo(branchMark);
           }
         }
         return;
       }
     } finally {
-      for (let index = propagated.length - 1; index >= 0; index -= 1) undo(propagated[index]);
+      undoTo(frameMark);
     }
   }
 
