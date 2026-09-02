@@ -31,6 +31,7 @@ export type FamilyGeometryContext = {
   linePairCounts: number[];
   activeLineIds: number[];
   activeLinePositions: number[];
+  previousCoherentWitness: Point | null;
 };
 
 export function createFamilyGeometryContext(r: number, residues: Point): FamilyGeometryContext {
@@ -65,6 +66,7 @@ export function createFamilyGeometryContext(r: number, residues: Point): FamilyG
     linePairCounts: [],
     activeLineIds: [],
     activeLinePositions: [],
+    previousCoherentWitness: null,
   };
 }
 
@@ -263,6 +265,122 @@ function transitionRowsCached(
 }
 
 type Normal = { lineId: number; sign: 1 | -1; point: Point };
+type ProjectedRow = { rowId: number; denominator: number };
+
+function dot(first: Point, second: Point): number {
+  return first[0] * second[0] + first[1] * second[1] + first[2] * second[2];
+}
+
+function determinant(first: Point, second: Point, third: Point): number {
+  return (
+    first[0] * (second[1] * third[2] - second[2] * third[1])
+    - first[1] * (second[0] * third[2] - second[2] * third[0])
+    + first[2] * (second[0] * third[1] - second[1] * third[0])
+  );
+}
+
+// If the previous exact coherence witness still strictly separates the current
+// transition rows, intersect every ray with witness·x=1. Supporting cone facets
+// are then exactly the edges of that 2D convex hull. The projected coordinates
+// are rational, but comparisons use cross multiplication and orientation uses the
+// original integer 3x3 determinant, so this path does not introduce floating-point
+// geometry. Degenerate or unsupported cases fall back to the pair-line scanner.
+function trySupportingNormalsFromWitness(
+  rowIds: readonly number[], context: FamilyGeometryContext, witness: Point,
+): Normal[] | null {
+  if (rowIds.length < 3) return null;
+  let dropAxis = 0;
+  if (Math.abs(witness[1]) > Math.abs(witness[dropAxis])) dropAxis = 1;
+  if (Math.abs(witness[2]) > Math.abs(witness[dropAxis])) dropAxis = 2;
+  if (witness[dropAxis] === 0) return null;
+  const projectionAxes: readonly (readonly [number, number])[] = [[1, 2], [2, 0], [0, 1]];
+  const [firstAxis, secondAxis] = projectionAxes[dropAxis];
+  const projected: ProjectedRow[] = [];
+  let maxDenominator = 0;
+  let maxCoordinate = 0;
+
+  for (const rowId of rowIds) {
+    const row = context.rowPoints[rowId];
+    const denominator = dot(row, witness);
+    if (denominator <= 0 || !Number.isSafeInteger(denominator)) return null;
+    maxDenominator = Math.max(maxDenominator, denominator);
+    maxCoordinate = Math.max(maxCoordinate, Math.abs(row[firstAxis]), Math.abs(row[secondAxis]));
+    projected.push({ rowId, denominator });
+  }
+  // The runtime Number-safety proof covers this bound for supported moduli. Keep
+  // the optimization fail-closed if a future representation violates it.
+  if (!Number.isSafeInteger(2 * maxDenominator * maxCoordinate)) return null;
+
+  const compareProjected = (first: ProjectedRow, second: ProjectedRow): number => {
+    const firstRow = context.rowPoints[first.rowId];
+    const secondRow = context.rowPoints[second.rowId];
+    const firstCoordinate = firstRow[firstAxis] * second.denominator - secondRow[firstAxis] * first.denominator;
+    if (firstCoordinate !== 0) return firstCoordinate;
+    return firstRow[secondAxis] * second.denominator - secondRow[secondAxis] * first.denominator;
+  };
+  projected.sort(compareProjected);
+
+  const unique: ProjectedRow[] = [];
+  for (const entry of projected) {
+    const previous = unique[unique.length - 1];
+    if (previous && compareProjected(previous, entry) === 0) continue;
+    unique.push(entry);
+  }
+  if (unique.length < 3) return null;
+
+  const orientationSign = witness[dropAxis] > 0 ? 1 : -1;
+  const orientation = (first: ProjectedRow, second: ProjectedRow, third: ProjectedRow): number => (
+    orientationSign * determinant(
+      context.rowPoints[first.rowId],
+      context.rowPoints[second.rowId],
+      context.rowPoints[third.rowId],
+    )
+  );
+
+  const lower: ProjectedRow[] = [];
+  for (const entry of unique) {
+    while (lower.length >= 2 && orientation(lower[lower.length - 2], lower[lower.length - 1], entry) <= 0) lower.pop();
+    lower.push(entry);
+  }
+  const upper: ProjectedRow[] = [];
+  for (let index = unique.length - 1; index >= 0; index -= 1) {
+    const entry = unique[index];
+    while (upper.length >= 2 && orientation(upper[upper.length - 2], upper[upper.length - 1], entry) <= 0) upper.pop();
+    upper.push(entry);
+  }
+  const hull = lower.slice(0, -1).concat(upper.slice(0, -1));
+  if (hull.length < 3) return null;
+
+  const normals: Normal[] = [];
+  for (let index = 0; index < hull.length; index += 1) {
+    const firstId = hull[index].rowId;
+    const secondId = hull[(index + 1) % hull.length].rowId;
+    const lineId = lineForPair(context, firstId, secondId);
+    if (lineId < 0) return null;
+    const line = context.linePoints[lineId];
+    let positive = false;
+    let negative = false;
+    for (const rowId of rowIds) {
+      const value = dot(line, context.rowPoints[rowId]);
+      if (value > 0) positive = true;
+      else if (value < 0) negative = true;
+      if (positive && negative) return null;
+    }
+    if (!negative) normals.push({ lineId, sign: 1, point: line });
+    else if (!positive) normals.push({ lineId, sign: -1, point: [-line[0], -line[1], -line[2]] });
+    else return null;
+  }
+  normals.sort((first, second) => comparePoint(first.point, second.point));
+
+  const candidate: [number, number, number] = [0, 0, 0];
+  for (const normal of normals) {
+    candidate[0] += normal.point[0];
+    candidate[1] += normal.point[1];
+    candidate[2] += normal.point[2];
+  }
+  if (!rowIds.every((rowId) => dot(context.rowPoints[rowId], candidate) > 0)) return null;
+  return normals;
+}
 
 function adjustActiveLinePair(context: FamilyGeometryContext, firstId: number, secondId: number, delta: 1 | -1): void {
   const lineId = lineForPair(context, firstId, secondId);
@@ -325,6 +443,12 @@ function syncActiveLines(rowIds: readonly number[], context: FamilyGeometryConte
 }
 
 function supportingNormalsCached(rowIds: readonly number[], context: FamilyGeometryContext, epoch: number): Normal[] {
+  const previousWitness = context.previousCoherentWitness;
+  if (previousWitness) {
+    const hullNormals = trySupportingNormalsFromWitness(rowIds, context, previousWitness);
+    if (hullNormals) return hullNormals;
+  }
+
   syncActiveLines(rowIds, context, epoch);
   const normals: Normal[] = [];
   for (let activeIndex = 0; activeIndex < context.activeLineIds.length; activeIndex += 1) {
@@ -386,6 +510,7 @@ export function geometryRecordCached(
       witness = candidate;
     }
   }
+  context.previousCoherentWitness = coherent ? witness : null;
 
   let activeMask = 0;
   for (const point of downset) {
