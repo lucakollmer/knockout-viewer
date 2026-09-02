@@ -15,6 +15,11 @@ export type FastModulusContext = {
   pointsByRank: readonly Point[];
 };
 
+export type FastRootPartition = {
+  index: number;
+  count: number;
+};
+
 type FastCandidate = {
   pointId: number;
   // Interleaved [character, encodedPointId] pairs. encodedPointId is pointId + 1,
@@ -162,10 +167,20 @@ export function* iterFastDownsets(
     modulusContext?: FastModulusContext;
     cancelCheck?: CancelCheck;
     metrics?: SearchMetrics;
+    rootPartition?: FastRootPartition;
   } = {},
 ): Generator<readonly Point[]> {
   assertExactRuntimeModulus(rInput);
   if (residuesInput.length !== 3) throw new Error('expected three residues');
+  const rootPartition = options.rootPartition;
+  if (rootPartition && (
+    !Number.isSafeInteger(rootPartition.index)
+    || !Number.isSafeInteger(rootPartition.count)
+    || rootPartition.count < 1
+    || rootPartition.index < 0
+    || rootPartition.index >= rootPartition.count
+  )) throw new Error('invalid fast CSP root partition');
+
   const r = rInput;
   const residues: Point = [
     ((residuesInput[0] % r) + r) % r,
@@ -255,14 +270,15 @@ export function* iterFastDownsets(
     return downset;
   };
 
-  function* search(): Generator<readonly Point[]> {
+  function* search(partitionPending: boolean): Generator<readonly Point[]> {
     if (options.metrics) options.metrics.nodes += 1;
     maybeCancel(options.cancelCheck);
     const frameMark = undoStack.length;
     try {
       while (true) {
         if (assignedCount === r) {
-          yield emit();
+          // A family with no non-singleton branch belongs to partition zero only.
+          if (!partitionPending || !rootPartition || rootPartition.index === 0) yield emit();
           return;
         }
 
@@ -303,11 +319,17 @@ export function* iterFastDownsets(
         }
 
         if (options.metrics) options.metrics.branches += 1;
-        for (const candidate of bestDomain) {
+        let branchStart = 0;
+        let branchEnd = bestDomain.length;
+        if (partitionPending && rootPartition) {
+          branchStart = Math.floor(bestDomain.length * rootPartition.index / rootPartition.count);
+          branchEnd = Math.floor(bestDomain.length * (rootPartition.index + 1) / rootPartition.count);
+        }
+        for (let branchIndex = branchStart; branchIndex < branchEnd; branchIndex += 1) {
           const branchMark = undoStack.length;
-          apply(candidate);
+          apply(bestDomain[branchIndex]);
           try {
-            yield* search();
+            yield* search(false);
           } finally {
             undoTo(branchMark);
           }
@@ -319,7 +341,7 @@ export function* iterFastDownsets(
     }
   }
 
-  yield* search();
+  yield* search(true);
 }
 
 export function enumerateFastDownsets(
@@ -329,6 +351,7 @@ export function enumerateFastDownsets(
     modulusContext?: FastModulusContext;
     cancelCheck?: CancelCheck;
     metrics?: SearchMetrics;
+    rootPartition?: FastRootPartition;
   } = {},
 ): readonly (readonly Point[])[] {
   return [...iterFastDownsets(r, residues, options)].sort(compareDownsets);
