@@ -24,12 +24,13 @@ export type FamilyGeometryContext = {
   characterEpochs: Uint32Array;
   rowEpochs: Uint32Array;
   recordEpoch: number;
-  linePositiveWitnesses: number[];
-  lineNegativeWitnesses: number[];
+  linePositiveWitnesses: Uint32Array;
+  lineNegativeWitnesses: Uint32Array;
   previousRowIds: number[];
   activeRowFlags: Uint8Array;
-  linePairCounts: number[];
-  activeLineIds: Set<number>;
+  linePairCounts: Uint32Array;
+  activeLineIds: number[];
+  activeLinePositions: Uint32Array;
 };
 
 export function createFamilyGeometryContext(r: number, residues: Point): FamilyGeometryContext {
@@ -57,12 +58,13 @@ export function createFamilyGeometryContext(r: number, residues: Point): FamilyG
     characterEpochs: new Uint32Array(r),
     rowEpochs: new Uint32Array(16),
     recordEpoch: 0,
-    linePositiveWitnesses: [],
-    lineNegativeWitnesses: [],
+    linePositiveWitnesses: new Uint32Array(16),
+    lineNegativeWitnesses: new Uint32Array(16),
     previousRowIds: [],
     activeRowFlags: new Uint8Array(16),
-    linePairCounts: [],
-    activeLineIds: new Set(),
+    linePairCounts: new Uint32Array(16),
+    activeLineIds: [],
+    activeLinePositions: new Uint32Array(16),
   };
 }
 
@@ -119,6 +121,16 @@ function ensureFlagCapacity(values: Uint8Array, needed: number): Uint8Array {
   return expanded;
 }
 
+function ensureLineCapacity(context: FamilyGeometryContext, needed: number): void {
+  if (needed <= context.linePairCounts.length) return;
+  let size = context.linePairCounts.length || 16;
+  while (size < needed) size *= 2;
+  const positive = new Uint32Array(size); positive.set(context.linePositiveWitnesses); context.linePositiveWitnesses = positive;
+  const negative = new Uint32Array(size); negative.set(context.lineNegativeWitnesses); context.lineNegativeWitnesses = negative;
+  const counts = new Uint32Array(size); counts.set(context.linePairCounts); context.linePairCounts = counts;
+  const positions = new Uint32Array(size); positions.set(context.activeLinePositions); context.activeLinePositions = positions;
+}
+
 function nextRecordEpoch(context: FamilyGeometryContext): number {
   if (context.recordEpoch >= 0xfffffffe) {
     context.characterEpochs.fill(0);
@@ -148,9 +160,7 @@ function registerLine(context: FamilyGeometryContext, point: Point): number {
   context.lineIds.set(key, id);
   context.linePoints.push(point);
   context.quotientScales.push(0);
-  context.linePositiveWitnesses.push(0);
-  context.lineNegativeWitnesses.push(0);
-  context.linePairCounts.push(0);
+  ensureLineCapacity(context, id + 1);
   return id;
 }
 
@@ -268,8 +278,19 @@ function adjustActiveLinePair(context: FamilyGeometryContext, firstId: number, s
   const next = previous + delta;
   if (next < 0) throw new Error('internal geometry line-pair count underflow');
   context.linePairCounts[lineId] = next;
-  if (previous === 0 && next !== 0) context.activeLineIds.add(lineId);
-  else if (previous !== 0 && next === 0) context.activeLineIds.delete(lineId);
+  if (previous === 0 && next !== 0) {
+    context.activeLinePositions[lineId] = context.activeLineIds.length + 1;
+    context.activeLineIds.push(lineId);
+  } else if (previous !== 0 && next === 0) {
+    const position = context.activeLinePositions[lineId] - 1;
+    const last = context.activeLineIds.pop();
+    if (position < 0 || last === undefined) throw new Error('internal geometry active-line index failure');
+    if (position < context.activeLineIds.length) {
+      context.activeLineIds[position] = last;
+      context.activeLinePositions[last] = position + 1;
+    }
+    context.activeLinePositions[lineId] = 0;
+  }
 }
 
 // Consecutive CSP emissions differ by only a few transition rows. Maintain the exact
@@ -313,7 +334,8 @@ function syncActiveLines(rowIds: readonly number[], context: FamilyGeometryConte
 function supportingNormalsCached(rowIds: readonly number[], context: FamilyGeometryContext, epoch: number): Normal[] {
   syncActiveLines(rowIds, context, epoch);
   const normals: Normal[] = [];
-  for (const lineId of context.activeLineIds) {
+  for (let activeIndex = 0; activeIndex < context.activeLineIds.length; activeIndex += 1) {
+    const lineId = context.activeLineIds[activeIndex];
     const previousPositive = context.linePositiveWitnesses[lineId];
     const previousNegative = context.lineNegativeWitnesses[lineId];
     // A remembered sign witness is globally valid for this line. If one side is
