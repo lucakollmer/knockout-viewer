@@ -44,6 +44,20 @@ describe('interactive optimized Asets path', () => {
     expect(digest(result)).toBe('713db807af7888ffe80f13f408bfa3e55912e8a94770a1d6fa1abd2a210546d5');
   });
 
+  it('concatenates deterministic root partitions into the exact single-thread order', () => {
+    const r = 14;
+    const residues: Point = [1, 9, 11];
+    const modulusContext = buildFastModulusContext(r);
+    const single = [...iterFastDownsets(r, residues, { modulusContext })];
+    const partitioned = Array.from({ length: 4 }, (_, index) => (
+      [...iterFastDownsets(r, residues, {
+        modulusContext,
+        rootPartition: { index, count: 4 },
+      })]
+    )).flat();
+    expect(partitioned).toEqual(single);
+  });
+
   it('preserves effective reduction before optimized computation', () => {
     const normalized = effectiveFamily(10, [2, 4, 6]);
     expect(normalized.r).toBe(5);
