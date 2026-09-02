@@ -1,4 +1,6 @@
 /// <reference lib="webworker" />
+/// <reference types="vite/client" />
+import asetsShardWorkerUrl from './asetsShard.worker.ts?worker&url';
 import {
   ASETS_ENGINE_VERSION,
   ASETS_SCHEMA_VERSION,
@@ -19,6 +21,11 @@ import type {
   AsetsWorkerMessage,
   AsetsWorkerRequest,
 } from '../asetsProtocol';
+import type {
+  AsetsShardMessage,
+  AsetsShardPerformance,
+  AsetsShardRequest,
+} from '../asetsShardProtocol';
 
 const cacheScopeRaw = new URL(self.location.href).searchParams.get('cache');
 const cacheScope = cacheScopeRaw?.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80) || '';
@@ -28,12 +35,11 @@ const HEADER_STORE = 'asetFamilyHeaders';
 const CHUNK_STORE = 'asetFamilyChunks';
 const TRANSFORM_STORE = 'asetGroupTransforms';
 const PROGRESS_RECORD_INTERVAL = 64;
-// Live chunks are larger than the old 64-record batches to reduce structured-clone
-// and React update overhead. Cache chunks are larger again because they are replayed
-// only after a complete-family cache hit and can optimize for IndexedDB put count.
 const LIVE_CHUNK_SIZE = 128;
 const CACHE_CHUNK_SIZE = 256;
 const MODULUS_CONTEXT_CACHE_LIMIT = 3;
+const PARALLEL_MIN_R = 250;
+const MAX_PARALLEL_SHARDS = 4;
 
 let activeGeneration = 0;
 let activeRequestId = 0;
@@ -41,6 +47,7 @@ let queuedRequest: AsetsComputeRequest | null = null;
 let running = false;
 const modulusContexts = new Map<number, FastModulusContext>();
 let cachePromise: Promise<IDBDatabase | null> | null = null;
+let cancelActiveParallel: (() => void) | null = null;
 
 const familyKeyArray = (key: AsetsFamilyKey): IDBValidKey[] => [...key];
 const chunkKeyArray = (key: AsetsFamilyKey, index: number): IDBValidKey[] => [...key, index];
@@ -157,6 +164,138 @@ function assertActive(token: number): void {
   if (token !== activeGeneration) throw new CancelledError();
 }
 
+function parallelShardCount(r: number): number {
+  if (r < PARALLEL_MIN_R || typeof Worker === 'undefined') return 1;
+  const hardwareConcurrency = self.navigator.hardwareConcurrency || 1;
+  if (hardwareConcurrency < 4) return 1;
+  return Math.min(MAX_PARALLEL_SHARDS, hardwareConcurrency >= 8 ? 4 : 2);
+}
+
+async function runParallelFamily(
+  r: number,
+  residues: readonly [number, number, number],
+  shardCount: number,
+  token: number,
+  acceptRecords: (records: readonly DownsetRecord[]) => void,
+): Promise<AsetsShardPerformance> {
+  return new Promise<AsetsShardPerformance>((resolve, reject) => {
+    const workers: Worker[] = [];
+    const buffers: Array<Array<readonly DownsetRecord[]>> = Array.from({ length: shardCount }, () => []);
+    const completed = new Uint8Array(shardCount);
+    const performances: Array<AsetsShardPerformance | null> = Array.from({ length: shardCount }, () => null);
+    const reportedCounts = new Uint32Array(shardCount);
+    let nextShard = 0;
+    let completedCount = 0;
+    let acceptedCount = 0;
+    let settled = false;
+
+    const cleanup = () => {
+      for (const worker of workers) worker.terminate();
+      if (cancelActiveParallel === cancel) cancelActiveParallel = null;
+    };
+
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+
+    const drain = () => {
+      try {
+        assertActive(token);
+        while (nextShard < shardCount) {
+          const queue = buffers[nextShard];
+          while (queue.length) {
+            const records = queue.shift();
+            if (!records) break;
+            acceptRecords(records);
+            acceptedCount += records.length;
+          }
+          if (completed[nextShard] === 0) break;
+          nextShard += 1;
+        }
+      } catch (error) {
+        fail(error);
+      }
+    };
+
+    const finishIfComplete = () => {
+      if (completedCount !== shardCount || settled) return;
+      drain();
+      if (settled) return;
+      if (nextShard !== shardCount) {
+        fail(new Error('internal Asets shard ordering failure'));
+        return;
+      }
+      const reportedTotal = reportedCounts.reduce((sum, value) => sum + value, 0);
+      if (reportedTotal !== acceptedCount) {
+        fail(new Error('internal Asets shard record-count mismatch'));
+        return;
+      }
+      let critical = performances[0];
+      if (!critical) {
+        fail(new Error('internal Asets shard performance missing'));
+        return;
+      }
+      for (let index = 1; index < performances.length; index += 1) {
+        const candidate = performances[index];
+        if (!candidate) {
+          fail(new Error('internal Asets shard performance missing'));
+          return;
+        }
+        if (candidate.totalWorkerComputeMs > critical.totalWorkerComputeMs) critical = candidate;
+      }
+      settled = true;
+      cleanup();
+      resolve(critical);
+    };
+
+    const cancel = () => fail(new CancelledError());
+    cancelActiveParallel = cancel;
+
+    try {
+      for (let shardIndex = 0; shardIndex < shardCount; shardIndex += 1) {
+        const resolved = new URL(asetsShardWorkerUrl, self.location.href);
+        const worker = new Worker(resolved, { type: 'module', name: `knockout-asets-shard-${shardIndex}` });
+        workers.push(worker);
+        worker.onmessage = (event: MessageEvent<AsetsShardMessage>) => {
+          const message = event.data;
+          if (message.shardIndex !== shardIndex || settled) return;
+          if (message.type === 'chunk') {
+            buffers[shardIndex].push(message.records);
+            drain();
+          } else if (message.type === 'complete') {
+            completed[shardIndex] = 1;
+            completedCount += 1;
+            reportedCounts[shardIndex] = message.recordCount;
+            performances[shardIndex] = message.performance;
+            drain();
+            finishIfComplete();
+          } else {
+            fail(new Error(`Asets shard ${shardIndex} failed: ${message.message}`));
+          }
+        };
+        worker.onerror = (event) => {
+          event.preventDefault();
+          fail(new Error(`Asets shard ${shardIndex} worker error: ${event.message || 'failed to load or start'}`));
+        };
+        worker.onmessageerror = () => fail(new Error(`Asets shard ${shardIndex} message deserialization error`));
+        const request: AsetsShardRequest = {
+          type: 'compute',
+          shardIndex,
+          shardCount,
+          r,
+          residues,
+        };
+        worker.postMessage(request);
+      }
+    } catch (error) {
+      fail(error);
+    }
+  });
+}
+
 async function readCompleteFamily(
   request: AsetsComputeRequest,
   key: AsetsFamilyKey,
@@ -227,33 +366,7 @@ async function computeAndCache(request: AsetsComputeRequest, token: number): Pro
   post({ type: 'status', requestId: request.requestId, phase: 'cache', familyKey: key, certificate: normalized.certificate, emittedRecords: 0 });
   if (await readCompleteFamily(request, key, normalized.certificate, token)) return;
 
-  post({ type: 'status', requestId: request.requestId, phase: 'context', familyKey: key, certificate: normalized.certificate, emittedRecords: 0 });
-  let context = modulusContexts.get(normalized.r);
-  if (context) {
-    modulusContexts.delete(normalized.r);
-    modulusContexts.set(normalized.r, context);
-  } else {
-    const contextStart = performance.now();
-    context = buildFastModulusContext(normalized.r, () => token !== activeGeneration);
-    performanceData.modulusContextSetupMs = performance.now() - contextStart;
-    modulusContexts.set(normalized.r, context);
-    if (modulusContexts.size > MODULUS_CONTEXT_CACHE_LIMIT) {
-      const oldest = modulusContexts.keys().next().value;
-      if (oldest !== undefined) modulusContexts.delete(oldest);
-    }
-  }
-  assertActive(token);
-
-  const geometryContext = createFamilyGeometryContext(normalized.r, normalized.residues);
   let header = makeHeader(key, normalized.r, normalized.residues);
-  post({ type: 'status', requestId: request.requestId, phase: 'compute', familyKey: key, certificate: normalized.certificate, emittedRecords: 0 });
-  const metrics = createSearchMetrics();
-  const iterator = iterFastDownsets(normalized.r, normalized.residues, {
-    modulusContext: context,
-    cancelCheck: () => token !== activeGeneration,
-    metrics,
-  });
-
   let recordCount = 0;
   let coherent = 0;
   let liveChunkIndex = 0;
@@ -288,25 +401,67 @@ async function computeAndCache(request: AsetsComputeRequest, token: number): Pro
     cacheChunkIndex += 1;
   };
 
-  while (true) {
+  const acceptRecords = (records: readonly DownsetRecord[]) => {
     assertActive(token);
-    const cspStart = performance.now();
-    const next = iterator.next();
-    performanceData.candidateCspEnumerationMs += performance.now() - cspStart;
-    if (next.done) break;
-    const geometryStart = performance.now();
-    const record = geometryRecordCached(next.value, normalized.residues, normalized.r, geometryContext);
-    performanceData.geometryMs += performance.now() - geometryStart;
-    recordCount += 1;
-    liveChunk.push(record);
-    cacheChunk.push(record);
-    if (record.coherent) coherent += 1;
-    if (recordCount % PROGRESS_RECORD_INTERVAL === 0) {
-      post({ type: 'status', requestId: request.requestId, phase: 'compute', familyKey: key, certificate: normalized.certificate, emittedRecords: recordCount });
-      updatePeakHeap(performanceData);
+    for (const record of records) {
+      recordCount += 1;
+      if (record.coherent) coherent += 1;
+      liveChunk.push(record);
+      cacheChunk.push(record);
+      if (recordCount % PROGRESS_RECORD_INTERVAL === 0) {
+        post({ type: 'status', requestId: request.requestId, phase: 'compute', familyKey: key, certificate: normalized.certificate, emittedRecords: recordCount });
+        updatePeakHeap(performanceData);
+      }
+      if (liveChunk.length >= LIVE_CHUNK_SIZE) flushLive();
+      if (cacheChunk.length >= CACHE_CHUNK_SIZE) flushCache();
     }
-    if (liveChunk.length >= LIVE_CHUNK_SIZE) flushLive();
-    if (cacheChunk.length >= CACHE_CHUNK_SIZE) flushCache();
+  };
+
+  const shardCount = parallelShardCount(normalized.r);
+  post({ type: 'status', requestId: request.requestId, phase: 'context', familyKey: key, certificate: normalized.certificate, emittedRecords: 0 });
+  if (shardCount > 1) {
+    post({ type: 'status', requestId: request.requestId, phase: 'compute', familyKey: key, certificate: normalized.certificate, emittedRecords: 0 });
+    const critical = await runParallelFamily(normalized.r, normalized.residues, shardCount, token, acceptRecords);
+    performanceData.modulusContextSetupMs = critical.modulusContextSetupMs;
+    performanceData.candidateCspEnumerationMs = critical.candidateCspEnumerationMs;
+    performanceData.geometryMs = critical.geometryMs;
+  } else {
+    let context = modulusContexts.get(normalized.r);
+    if (context) {
+      modulusContexts.delete(normalized.r);
+      modulusContexts.set(normalized.r, context);
+    } else {
+      const contextStart = performance.now();
+      context = buildFastModulusContext(normalized.r, () => token !== activeGeneration);
+      performanceData.modulusContextSetupMs = performance.now() - contextStart;
+      modulusContexts.set(normalized.r, context);
+      if (modulusContexts.size > MODULUS_CONTEXT_CACHE_LIMIT) {
+        const oldest = modulusContexts.keys().next().value;
+        if (oldest !== undefined) modulusContexts.delete(oldest);
+      }
+    }
+    assertActive(token);
+
+    const geometryContext = createFamilyGeometryContext(normalized.r, normalized.residues);
+    post({ type: 'status', requestId: request.requestId, phase: 'compute', familyKey: key, certificate: normalized.certificate, emittedRecords: 0 });
+    const metrics = createSearchMetrics();
+    const iterator = iterFastDownsets(normalized.r, normalized.residues, {
+      modulusContext: context,
+      cancelCheck: () => token !== activeGeneration,
+      metrics,
+    });
+
+    while (true) {
+      assertActive(token);
+      const cspStart = performance.now();
+      const next = iterator.next();
+      performanceData.candidateCspEnumerationMs += performance.now() - cspStart;
+      if (next.done) break;
+      const geometryStart = performance.now();
+      const record = geometryRecordCached(next.value, normalized.residues, normalized.r, geometryContext);
+      performanceData.geometryMs += performance.now() - geometryStart;
+      acceptRecords([record]);
+    }
   }
   flushLive();
   flushCache();
@@ -362,10 +517,12 @@ self.onmessage = (event: MessageEvent<AsetsWorkerRequest>) => {
     if (message.requestId === undefined || message.requestId === activeRequestId) {
       activeGeneration += 1;
       queuedRequest = null;
+      cancelActiveParallel?.();
     }
     return;
   }
   activeGeneration += 1;
+  cancelActiveParallel?.();
   queuedRequest = message;
   void runLoop();
 };
