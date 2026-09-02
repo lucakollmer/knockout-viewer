@@ -15,8 +15,10 @@ export type FastModulusContext = {
 
 type FastCandidate = {
   pointId: number;
-  characters: readonly number[];
-  pointIds: readonly number[];
+  // Interleaved [character, encodedPointId] pairs. encodedPointId is pointId + 1,
+  // matching assigned[] so the hot compatibility/apply loops walk one array and
+  // avoid a per-entry conversion.
+  assignments: readonly number[];
 };
 
 function maybeCancel(cancelCheck?: CancelCheck): void {
@@ -108,8 +110,7 @@ function familyCandidatesFast(
     const currentEpoch = epoch;
     epoch += 1;
     const boxIds = boxPointIds[pointId];
-    const assignmentCharacters: number[] = [];
-    const assignmentPointIds: number[] = [];
+    const assignments: number[] = [];
     let valid = true;
 
     for (let index = 0; index < boxIds.length; index += 1) {
@@ -120,15 +121,13 @@ function familyCandidatesFast(
         break;
       }
       seenEpoch[chi] = currentEpoch;
-      assignmentCharacters.push(chi);
-      assignmentPointIds.push(assignedPointId);
+      assignments.push(chi, assignedPointId + 1);
     }
 
     if (valid) {
       buckets[characters[pointId]].push({
         pointId,
-        characters: assignmentCharacters,
-        pointIds: assignmentPointIds,
+        assignments,
       });
     }
     if ((pointId & 127) === 0) maybeCancel(cancelCheck);
@@ -168,21 +167,22 @@ export function* iterFastDownsets(
 
   const compatible = (candidate: FastCandidate): boolean => {
     if (options.metrics) options.metrics.compatibilityChecks += 1;
-    for (let index = 0; index < candidate.characters.length; index += 1) {
-      const chi = candidate.characters[index];
+    const assignments = candidate.assignments;
+    for (let index = 0; index < assignments.length; index += 2) {
+      const chi = assignments[index];
       const current = assigned[chi];
-      const candidatePoint = candidate.pointIds[index] + 1;
-      if (current !== 0 && current !== candidatePoint) return false;
+      if (current !== 0 && current !== assignments[index + 1]) return false;
     }
     return true;
   };
 
   const apply = (candidate: FastCandidate): number[] => {
     const added: number[] = [];
-    for (let index = 0; index < candidate.characters.length; index += 1) {
-      const chi = candidate.characters[index];
+    const assignments = candidate.assignments;
+    for (let index = 0; index < assignments.length; index += 2) {
+      const chi = assignments[index];
       if (assigned[chi] === 0) {
-        assigned[chi] = candidate.pointIds[index] + 1;
+        assigned[chi] = assignments[index + 1];
         added.push(chi);
       }
     }

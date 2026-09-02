@@ -29,7 +29,8 @@ export type FamilyGeometryContext = {
   previousRowIds: number[];
   activeRowFlags: Uint8Array;
   linePairCounts: number[];
-  activeLineIds: Set<number>;
+  activeLineIds: number[];
+  activeLinePositions: number[];
 };
 
 export function createFamilyGeometryContext(r: number, residues: Point): FamilyGeometryContext {
@@ -62,7 +63,8 @@ export function createFamilyGeometryContext(r: number, residues: Point): FamilyG
     previousRowIds: [],
     activeRowFlags: new Uint8Array(16),
     linePairCounts: [],
-    activeLineIds: new Set(),
+    activeLineIds: [],
+    activeLinePositions: [],
   };
 }
 
@@ -151,6 +153,7 @@ function registerLine(context: FamilyGeometryContext, point: Point): number {
   context.linePositiveWitnesses.push(0);
   context.lineNegativeWitnesses.push(0);
   context.linePairCounts.push(0);
+  context.activeLinePositions.push(0);
   return id;
 }
 
@@ -268,8 +271,19 @@ function adjustActiveLinePair(context: FamilyGeometryContext, firstId: number, s
   const next = previous + delta;
   if (next < 0) throw new Error('internal geometry line-pair count underflow');
   context.linePairCounts[lineId] = next;
-  if (previous === 0 && next !== 0) context.activeLineIds.add(lineId);
-  else if (previous !== 0 && next === 0) context.activeLineIds.delete(lineId);
+  if (previous === 0 && next !== 0) {
+    context.activeLinePositions[lineId] = context.activeLineIds.length + 1;
+    context.activeLineIds.push(lineId);
+  } else if (previous !== 0 && next === 0) {
+    const position = context.activeLinePositions[lineId] - 1;
+    const last = context.activeLineIds.pop();
+    if (position < 0 || last === undefined) throw new Error('internal geometry active-line index failure');
+    if (position < context.activeLineIds.length) {
+      context.activeLineIds[position] = last;
+      context.activeLinePositions[last] = position + 1;
+    }
+    context.activeLinePositions[lineId] = 0;
+  }
 }
 
 // Consecutive CSP emissions differ by only a few transition rows. Maintain the exact
@@ -313,7 +327,8 @@ function syncActiveLines(rowIds: readonly number[], context: FamilyGeometryConte
 function supportingNormalsCached(rowIds: readonly number[], context: FamilyGeometryContext, epoch: number): Normal[] {
   syncActiveLines(rowIds, context, epoch);
   const normals: Normal[] = [];
-  for (const lineId of context.activeLineIds) {
+  for (let activeIndex = 0; activeIndex < context.activeLineIds.length; activeIndex += 1) {
+    const lineId = context.activeLineIds[activeIndex];
     const previousPositive = context.linePositiveWitnesses[lineId];
     const previousNegative = context.lineNegativeWitnesses[lineId];
     // A remembered sign witness is globally valid for this line. If one side is
