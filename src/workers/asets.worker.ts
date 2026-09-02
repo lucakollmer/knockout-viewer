@@ -35,10 +35,10 @@ const HEADER_STORE = 'asetFamilyHeaders';
 const CHUNK_STORE = 'asetFamilyChunks';
 const TRANSFORM_STORE = 'asetGroupTransforms';
 const PROGRESS_RECORD_INTERVAL = 64;
-const LIVE_CHUNK_SIZE = 128;
-const CACHE_CHUNK_SIZE = 256;
+const LIVE_CHUNK_SIZE = 64;
+const CACHE_CHUNK_SIZE = 64;
 const MODULUS_CONTEXT_CACHE_LIMIT = 3;
-const PARALLEL_MIN_R = 250;
+const PARALLEL_MIN_R = 410;
 const MAX_PARALLEL_SHARDS = 4;
 
 let activeGeneration = 0;
