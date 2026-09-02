@@ -26,6 +26,9 @@ export type FamilyGeometryContext = {
   recordEpoch: number;
   linePositiveWitnesses: number[];
   lineNegativeWitnesses: number[];
+  linePositiveCounts: number[];
+  lineNegativeCounts: number[];
+  lineRefreshEpochs: Uint32Array;
   previousRowIds: number[];
   activeRowFlags: Uint8Array;
   linePairCounts: number[];
@@ -59,6 +62,9 @@ export function createFamilyGeometryContext(r: number, residues: Point): FamilyG
     recordEpoch: 0,
     linePositiveWitnesses: [],
     lineNegativeWitnesses: [],
+    linePositiveCounts: [],
+    lineNegativeCounts: [],
+    lineRefreshEpochs: new Uint32Array(16),
     previousRowIds: [],
     activeRowFlags: new Uint8Array(16),
     linePairCounts: [],
@@ -123,6 +129,7 @@ function nextRecordEpoch(context: FamilyGeometryContext): number {
   if (context.recordEpoch >= 0xfffffffe) {
     context.characterEpochs.fill(0);
     context.rowEpochs.fill(0);
+    context.lineRefreshEpochs.fill(0);
     context.recordEpoch = 1;
   } else {
     context.recordEpoch += 1;
@@ -150,7 +157,10 @@ function registerLine(context: FamilyGeometryContext, point: Point): number {
   context.quotientScales.push(0);
   context.linePositiveWitnesses.push(0);
   context.lineNegativeWitnesses.push(0);
+  context.linePositiveCounts.push(0);
+  context.lineNegativeCounts.push(0);
   context.linePairCounts.push(0);
+  context.lineRefreshEpochs = ensureEpochCapacity(context.lineRefreshEpochs, id + 1);
   return id;
 }
 
@@ -260,84 +270,110 @@ function transitionRowsCached(
 }
 
 type Normal = { lineId: number; sign: 1 | -1; point: Point };
+type RowDelta = { addedRowIds: number[]; removedRowIds: number[] };
 
-function adjustActiveLinePair(context: FamilyGeometryContext, firstId: number, secondId: number, delta: 1 | -1): void {
+function adjustActiveLinePair(
+  context: FamilyGeometryContext, firstId: number, secondId: number, delta: 1 | -1, epoch: number,
+): void {
   const lineId = lineForPair(context, firstId, secondId);
   if (lineId < 0) return;
   const previous = context.linePairCounts[lineId];
   const next = previous + delta;
   if (next < 0) throw new Error('internal geometry line-pair count underflow');
   context.linePairCounts[lineId] = next;
-  if (previous === 0 && next !== 0) context.activeLineIds.add(lineId);
-  else if (previous !== 0 && next === 0) context.activeLineIds.delete(lineId);
+  if (previous === 0 && next !== 0) {
+    context.lineRefreshEpochs = ensureEpochCapacity(context.lineRefreshEpochs, lineId + 1);
+    context.lineRefreshEpochs[lineId] = epoch;
+    context.activeLineIds.add(lineId);
+  } else if (previous !== 0 && next === 0) {
+    context.activeLineIds.delete(lineId);
+  }
 }
 
 // Consecutive CSP emissions differ by only a few transition rows. Maintain the exact
 // candidate-line multiset by adding/removing only pairs touched by those row changes.
-function syncActiveLines(rowIds: readonly number[], context: FamilyGeometryContext, epoch: number): void {
+function syncActiveLines(rowIds: readonly number[], context: FamilyGeometryContext, epoch: number): RowDelta {
   const maxRowId = rowIds.reduce((maximum, rowId) => Math.max(maximum, rowId), -1);
   context.activeRowFlags = ensureFlagCapacity(context.activeRowFlags, maxRowId + 1);
   const previous = context.previousRowIds;
   if (previous.length === 0) {
     for (let first = 0; first < rowIds.length; first += 1) {
       for (let second = first + 1; second < rowIds.length; second += 1) {
-        adjustActiveLinePair(context, rowIds[first], rowIds[second], 1);
+        adjustActiveLinePair(context, rowIds[first], rowIds[second], 1, epoch);
       }
     }
     for (const rowId of rowIds) context.activeRowFlags[rowId] = 1;
     context.previousRowIds = [...rowIds];
-    return;
+    return { addedRowIds: [...rowIds], removedRowIds: [] };
   }
 
-  for (const removed of previous) {
-    if (context.rowEpochs[removed] === epoch) continue;
+  const removedRowIds: number[] = [];
+  for (const rowId of previous) {
+    if (context.rowEpochs[rowId] !== epoch) removedRowIds.push(rowId);
+  }
+  const addedRowIds: number[] = [];
+  for (const rowId of rowIds) {
+    if (context.activeRowFlags[rowId] === 0) addedRowIds.push(rowId);
+  }
+
+  for (const removed of removedRowIds) {
     for (const other of previous) {
       if (other === removed) continue;
       const otherRemoved = context.rowEpochs[other] !== epoch;
-      if (!otherRemoved || removed < other) adjustActiveLinePair(context, removed, other, -1);
+      if (!otherRemoved || removed < other) adjustActiveLinePair(context, removed, other, -1, epoch);
     }
   }
-  for (const added of rowIds) {
-    if (context.activeRowFlags[added] !== 0) continue;
+  for (const added of addedRowIds) {
     for (const other of rowIds) {
       if (other === added) continue;
       const otherAdded = context.activeRowFlags[other] === 0;
-      if (!otherAdded || added < other) adjustActiveLinePair(context, added, other, 1);
+      if (!otherAdded || added < other) adjustActiveLinePair(context, added, other, 1, epoch);
     }
   }
-  for (const removed of previous) if (context.rowEpochs[removed] !== epoch) context.activeRowFlags[removed] = 0;
-  for (const added of rowIds) context.activeRowFlags[added] = 1;
+  for (const removed of removedRowIds) context.activeRowFlags[removed] = 0;
+  for (const added of addedRowIds) context.activeRowFlags[added] = 1;
   context.previousRowIds = [...rowIds];
+  return { addedRowIds, removedRowIds };
+}
+
+function rowSign(line: Point, row: Point): -1 | 0 | 1 {
+  const value = line[0] * row[0] + line[1] * row[1] + line[2] * row[2];
+  return value > 0 ? 1 : value < 0 ? -1 : 0;
 }
 
 function supportingNormalsCached(rowIds: readonly number[], context: FamilyGeometryContext, epoch: number): Normal[] {
-  syncActiveLines(rowIds, context, epoch);
+  const { addedRowIds, removedRowIds } = syncActiveLines(rowIds, context, epoch);
   const normals: Normal[] = [];
   for (const lineId of context.activeLineIds) {
-    const previousPositive = context.linePositiveWitnesses[lineId];
-    const previousNegative = context.lineNegativeWitnesses[lineId];
-    // A remembered sign witness is globally valid for this line. If one side is
-    // still present, seed the scan with it and search only for the missing side.
-    let positive = previousPositive !== 0 && context.rowEpochs[previousPositive - 1] === epoch ? previousPositive : 0;
-    let negative = previousNegative !== 0 && context.rowEpochs[previousNegative - 1] === epoch ? previousNegative : 0;
-    if (positive !== 0 && negative !== 0) continue;
-    let mixed = false;
     const line = context.linePoints[lineId];
-    for (const rowId of rowIds) {
-      const row = context.rowPoints[rowId];
-      const value = line[0] * row[0] + line[1] * row[1] + line[2] * row[2];
-      if (value > 0 && positive === 0) positive = rowId + 1;
-      else if (value < 0 && negative === 0) negative = rowId + 1;
-      if (positive !== 0 && negative !== 0) {
-        context.linePositiveWitnesses[lineId] = positive;
-        context.lineNegativeWitnesses[lineId] = negative;
-        mixed = true;
-        break;
+    let positive = context.linePositiveCounts[lineId];
+    let negative = context.lineNegativeCounts[lineId];
+
+    if (context.lineRefreshEpochs[lineId] === epoch) {
+      positive = 0;
+      negative = 0;
+      for (const rowId of rowIds) {
+        const sign = rowSign(line, context.rowPoints[rowId]);
+        if (sign > 0) positive += 1;
+        else if (sign < 0) negative += 1;
       }
+    } else {
+      for (const rowId of removedRowIds) {
+        const sign = rowSign(line, context.rowPoints[rowId]);
+        if (sign > 0) positive -= 1;
+        else if (sign < 0) negative -= 1;
+      }
+      for (const rowId of addedRowIds) {
+        const sign = rowSign(line, context.rowPoints[rowId]);
+        if (sign > 0) positive += 1;
+        else if (sign < 0) negative += 1;
+      }
+      if (positive < 0 || negative < 0) throw new Error('internal geometry line-sign count underflow');
     }
-    if (mixed) continue;
-    if (positive !== 0) context.linePositiveWitnesses[lineId] = positive;
-    if (negative !== 0) context.lineNegativeWitnesses[lineId] = negative;
+
+    context.linePositiveCounts[lineId] = positive;
+    context.lineNegativeCounts[lineId] = negative;
+    if (positive !== 0 && negative !== 0) continue;
     if (negative === 0) normals.push({ lineId, sign: 1, point: line });
     else if (positive === 0) normals.push({ lineId, sign: -1, point: [-line[0], -line[1], -line[2]] });
   }
