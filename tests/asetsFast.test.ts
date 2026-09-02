@@ -58,6 +58,23 @@ describe('interactive optimized Asets path', () => {
     expect(partitioned).toEqual(single);
   });
 
+  it('keeps exact geometry records when partitions use independent geometry contexts', () => {
+    const r = 14;
+    const residues: Point = [1, 9, 11];
+    const modulusContext = buildFastModulusContext(r);
+    const singleGeometry = createFamilyGeometryContext(r, residues);
+    const single = [...iterFastDownsets(r, residues, { modulusContext })]
+      .map((downset) => geometryRecordCached(downset, residues, r, singleGeometry));
+    const partitioned = Array.from({ length: 4 }, (_, index) => {
+      const geometryContext = createFamilyGeometryContext(r, residues);
+      return [...iterFastDownsets(r, residues, {
+        modulusContext,
+        rootPartition: { index, count: 4 },
+      })].map((downset) => geometryRecordCached(downset, residues, r, geometryContext));
+    }).flat();
+    expect(partitioned).toEqual(single);
+  });
+
   it('preserves effective reduction before optimized computation', () => {
     const normalized = effectiveFamily(10, [2, 4, 6]);
     expect(normalized.r).toBe(5);
