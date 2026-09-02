@@ -28,7 +28,11 @@ const HEADER_STORE = 'asetFamilyHeaders';
 const CHUNK_STORE = 'asetFamilyChunks';
 const TRANSFORM_STORE = 'asetGroupTransforms';
 const PROGRESS_RECORD_INTERVAL = 64;
-const CACHE_CHUNK_SIZE = 64;
+// Live chunks are larger than the old 64-record batches to reduce structured-clone
+// and React update overhead. Cache chunks are larger again because they are replayed
+// only after a complete-family cache hit and can optimize for IndexedDB put count.
+const LIVE_CHUNK_SIZE = 128;
+const CACHE_CHUNK_SIZE = 256;
 const MODULUS_CONTEXT_CACHE_LIMIT = 3;
 
 let activeGeneration = 0;
@@ -252,27 +256,36 @@ async function computeAndCache(request: AsetsComputeRequest, token: number): Pro
 
   let recordCount = 0;
   let coherent = 0;
-  let chunkIndex = 0;
-  let chunk: DownsetRecord[] = [];
-  const chunks: AsetsFamilyChunk[] = [];
-  const flush = () => {
-    if (!chunk.length) return;
-    const records = chunk;
-    chunk = [];
-    const stored: AsetsFamilyChunk = {
+  let liveChunkIndex = 0;
+  let liveChunk: DownsetRecord[] = [];
+  let cacheChunkIndex = 0;
+  let cacheChunk: DownsetRecord[] = [];
+  const cacheChunks: AsetsFamilyChunk[] = [];
+
+  const flushLive = () => {
+    if (!liveChunk.length) return;
+    const records = liveChunk;
+    liveChunk = [];
+    if (request.includeRecords) {
+      const serializeStart = performance.now();
+      post({ type: 'chunk', requestId: request.requestId, familyKey: key, chunkIndex: liveChunkIndex, records, cached: false });
+      performanceData.serializationChunkingMs += performance.now() - serializeStart;
+    }
+    liveChunkIndex += 1;
+  };
+
+  const flushCache = () => {
+    if (!cacheChunk.length) return;
+    const records = cacheChunk;
+    cacheChunk = [];
+    cacheChunks.push({
       schemaVersion: ASETS_SCHEMA_VERSION,
       engineVersion: ASETS_ENGINE_VERSION,
       familyKey: key,
-      chunkIndex,
+      chunkIndex: cacheChunkIndex,
       records,
-    };
-    chunks.push(stored);
-    if (request.includeRecords) {
-      const serializeStart = performance.now();
-      post({ type: 'chunk', requestId: request.requestId, familyKey: key, chunkIndex, records, cached: false });
-      performanceData.serializationChunkingMs += performance.now() - serializeStart;
-    }
-    chunkIndex += 1;
+    });
+    cacheChunkIndex += 1;
   };
 
   while (true) {
@@ -285,15 +298,18 @@ async function computeAndCache(request: AsetsComputeRequest, token: number): Pro
     const record = geometryRecordCached(next.value, normalized.residues, normalized.r, geometryContext);
     performanceData.geometryMs += performance.now() - geometryStart;
     recordCount += 1;
-    chunk.push(record);
+    liveChunk.push(record);
+    cacheChunk.push(record);
     if (record.coherent) coherent += 1;
     if (recordCount % PROGRESS_RECORD_INTERVAL === 0) {
       post({ type: 'status', requestId: request.requestId, phase: 'compute', familyKey: key, certificate: normalized.certificate, emittedRecords: recordCount });
       updatePeakHeap(performanceData);
     }
-    if (chunk.length >= CACHE_CHUNK_SIZE) flush();
+    if (liveChunk.length >= LIVE_CHUNK_SIZE) flushLive();
+    if (cacheChunk.length >= CACHE_CHUNK_SIZE) flushCache();
   }
-  flush();
+  flushLive();
+  flushCache();
 
   post({ type: 'status', requestId: request.requestId, phase: 'finalize', familyKey: key, certificate: normalized.certificate, emittedRecords: recordCount });
   performanceData.totalWorkerComputeMs = performance.now() - wallStart;
@@ -304,12 +320,12 @@ async function computeAndCache(request: AsetsComputeRequest, token: number): Pro
     downsetTotal: recordCount,
     coherentTotal: coherent,
     noncoherentTotal: recordCount - coherent,
-    chunkCount: chunkIndex,
+    chunkCount: cacheChunkIndex,
     completedAt: new Date().toISOString(),
     performance: performanceData,
   };
   const writeStart = performance.now();
-  await idbPutCompleteFamily(key, chunks, header, makeTransform(request, key, normalized.certificate));
+  await idbPutCompleteFamily(key, cacheChunks, header, makeTransform(request, key, normalized.certificate));
   performanceData.indexedDbWriteMs += performance.now() - writeStart;
   header = { ...header, performance: { ...performanceData } };
   post({ type: 'complete', requestId: request.requestId, familyKey: key, certificate: normalized.certificate, header, cached: false });
