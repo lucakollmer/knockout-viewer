@@ -11,6 +11,8 @@ export type FastModulusContext = {
   r: number;
   points: readonly Point[];
   boxPointIds: readonly Uint32Array[];
+  pointRanks: Uint32Array;
+  pointsByRank: readonly Point[];
 };
 
 type FastCandidate = {
@@ -78,7 +80,20 @@ export function buildFastModulusContext(r: number, cancelCheck?: CancelCheck): F
     if ((pointId & 127) === 0) maybeCancel(cancelCheck);
   }
 
-  return { r, points, boxPointIds };
+  // Every emitted downset is sorted by this same degree/lexicographic order.
+  // Precompute ranks once so the search can maintain a selected-rank bitset and
+  // avoid sorting r Point objects for every completed solution.
+  const rankedPointIds = Array.from({ length: points.length }, (_, pointId) => pointId)
+    .sort((firstId, secondId) => comparePointByDegree(points[firstId], points[secondId]));
+  const pointRanks = new Uint32Array(points.length);
+  const pointsByRank: Point[] = new Array(points.length);
+  for (let rank = 0; rank < rankedPointIds.length; rank += 1) {
+    const pointId = rankedPointIds[rank];
+    pointRanks[pointId] = rank;
+    pointsByRank[rank] = points[pointId];
+  }
+
+  return { r, points, boxPointIds, pointRanks, pointsByRank };
 }
 
 function familyCandidatesFast(
@@ -87,7 +102,7 @@ function familyCandidatesFast(
   cancelCheck?: CancelCheck,
   metrics?: SearchMetrics,
 ): readonly (readonly FastCandidate[])[] {
-  const { r, points, boxPointIds } = context;
+  const { r, points, boxPointIds, pointRanks } = context;
   const characters = new Uint32Array(points.length);
   for (let pointId = 0; pointId < points.length; pointId += 1) {
     const point = points[pointId];
@@ -134,7 +149,7 @@ function familyCandidatesFast(
   }
 
   for (const bucket of buckets) {
-    bucket.sort((first, second) => comparePointByDegree(points[first.pointId], points[second.pointId]));
+    bucket.sort((first, second) => pointRanks[first.pointId] - pointRanks[second.pointId]);
   }
   if (metrics) metrics.candidateCount = buckets.reduce((total, bucket) => total + bucket.length, 0);
   return buckets;
@@ -165,6 +180,23 @@ export function* iterFastDownsets(
   assigned[0] = 1;
   let assignedCount = 1;
   const undoStack: number[] = [];
+  const selectedRankBits = new Uint32Array(Math.ceil(context.pointsByRank.length / 32));
+
+  const markSelectedPoint = (encodedPointId: number): void => {
+    const rank = context.pointRanks[encodedPointId - 1];
+    const wordIndex = rank >>> 5;
+    const mask = 1 << (rank & 31);
+    selectedRankBits[wordIndex] = (selectedRankBits[wordIndex] | mask) >>> 0;
+  };
+
+  const unmarkSelectedPoint = (encodedPointId: number): void => {
+    const rank = context.pointRanks[encodedPointId - 1];
+    const wordIndex = rank >>> 5;
+    const mask = 1 << (rank & 31);
+    selectedRankBits[wordIndex] = (selectedRankBits[wordIndex] & ~mask) >>> 0;
+  };
+
+  markSelectedPoint(1);
 
   const compatible = (candidate: FastCandidate): boolean => {
     if (options.metrics) options.metrics.compatibilityChecks += 1;
@@ -182,7 +214,9 @@ export function* iterFastDownsets(
     for (let index = 0; index < assignments.length; index += 2) {
       const chi = assignments[index];
       if (assigned[chi] === 0) {
-        assigned[chi] = assignments[index + 1];
+        const encodedPointId = assignments[index + 1];
+        assigned[chi] = encodedPointId;
+        markSelectedPoint(encodedPointId);
         undoStack.push(chi);
         assignedCount += 1;
       }
@@ -193,18 +227,31 @@ export function* iterFastDownsets(
     while (undoStack.length > mark) {
       const chi = undoStack.pop();
       if (chi === undefined) throw new Error('internal fast CSP undo failure');
+      const encodedPointId = assigned[chi];
+      if (encodedPointId === 0) throw new Error('internal fast CSP undo point failure');
+      unmarkSelectedPoint(encodedPointId);
       assigned[chi] = 0;
       assignedCount -= 1;
     }
   };
 
   const emit = (): readonly Point[] => {
-    const downset: Point[] = [];
-    for (let chi = 0; chi < r; chi += 1) {
-      const encoded = assigned[chi];
-      if (encoded !== 0) downset.push(context.points[encoded - 1]);
+    const downset: Point[] = new Array(r);
+    let outputIndex = 0;
+    for (let wordIndex = 0; wordIndex < selectedRankBits.length; wordIndex += 1) {
+      let word = selectedRankBits[wordIndex] >>> 0;
+      while (word !== 0) {
+        const lowBit = word & -word;
+        const bitIndex = 31 - Math.clz32(lowBit);
+        const rank = (wordIndex << 5) + bitIndex;
+        const point = context.pointsByRank[rank];
+        if (point === undefined) throw new Error('internal fast CSP point-rank failure');
+        downset[outputIndex] = point;
+        outputIndex += 1;
+        word = (word & (word - 1)) >>> 0;
+      }
     }
-    downset.sort(comparePointByDegree);
+    if (outputIndex !== r) throw new Error('internal fast CSP selected-rank count failure');
     return downset;
   };
 
