@@ -24,13 +24,13 @@ export type FamilyGeometryContext = {
   characterEpochs: Uint32Array;
   rowEpochs: Uint32Array;
   recordEpoch: number;
-  linePositiveWitnesses: Uint32Array;
-  lineNegativeWitnesses: Uint32Array;
+  linePositiveWitnesses: number[];
+  lineNegativeWitnesses: number[];
   previousRowIds: number[];
   activeRowFlags: Uint8Array;
-  linePairCounts: Uint32Array;
+  linePairCounts: number[];
   activeLineIds: number[];
-  activeLinePositions: Uint32Array;
+  activeLinePositions: number[];
 };
 
 export function createFamilyGeometryContext(r: number, residues: Point): FamilyGeometryContext {
@@ -58,13 +58,13 @@ export function createFamilyGeometryContext(r: number, residues: Point): FamilyG
     characterEpochs: new Uint32Array(r),
     rowEpochs: new Uint32Array(16),
     recordEpoch: 0,
-    linePositiveWitnesses: new Uint32Array(16),
-    lineNegativeWitnesses: new Uint32Array(16),
+    linePositiveWitnesses: [],
+    lineNegativeWitnesses: [],
     previousRowIds: [],
     activeRowFlags: new Uint8Array(16),
-    linePairCounts: new Uint32Array(16),
+    linePairCounts: [],
     activeLineIds: [],
-    activeLinePositions: new Uint32Array(16),
+    activeLinePositions: [],
   };
 }
 
@@ -121,16 +121,6 @@ function ensureFlagCapacity(values: Uint8Array, needed: number): Uint8Array {
   return expanded;
 }
 
-function ensureLineCapacity(context: FamilyGeometryContext, needed: number): void {
-  if (needed <= context.linePairCounts.length) return;
-  let size = context.linePairCounts.length || 16;
-  while (size < needed) size *= 2;
-  const positive = new Uint32Array(size); positive.set(context.linePositiveWitnesses); context.linePositiveWitnesses = positive;
-  const negative = new Uint32Array(size); negative.set(context.lineNegativeWitnesses); context.lineNegativeWitnesses = negative;
-  const counts = new Uint32Array(size); counts.set(context.linePairCounts); context.linePairCounts = counts;
-  const positions = new Uint32Array(size); positions.set(context.activeLinePositions); context.activeLinePositions = positions;
-}
-
 function nextRecordEpoch(context: FamilyGeometryContext): number {
   if (context.recordEpoch >= 0xfffffffe) {
     context.characterEpochs.fill(0);
@@ -160,7 +150,10 @@ function registerLine(context: FamilyGeometryContext, point: Point): number {
   context.lineIds.set(key, id);
   context.linePoints.push(point);
   context.quotientScales.push(0);
-  ensureLineCapacity(context, id + 1);
+  context.linePositiveWitnesses.push(0);
+  context.lineNegativeWitnesses.push(0);
+  context.linePairCounts.push(0);
+  context.activeLinePositions.push(0);
   return id;
 }
 
