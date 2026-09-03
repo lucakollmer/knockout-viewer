@@ -20,6 +20,10 @@ export type AsetsPerformance = {
   indexedDbReadMs: number;
   indexedDbWriteMs: number;
   peakUsedJsHeapBytes: number | null;
+  /** Number of compute workers used after the sequential workload probe. */
+  parallelShards?: number;
+  /** Exact prefix record count computed sequentially before a parallel replay, or zero. */
+  parallelProbeRecords?: number;
 };
 
 export type AsetsFamilyHeader = {
