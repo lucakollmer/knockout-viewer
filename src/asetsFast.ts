@@ -158,6 +158,42 @@ function familyCandidatesFast(
   return buckets;
 }
 
+function weightedRootPartitionBounds(
+  domain: readonly FastCandidate[],
+  r: number,
+  partition: FastRootPartition,
+): readonly [number, number] {
+  if (partition.count === 1 || domain.length <= 1) return [0, domain.length];
+
+  // Root branches that assign fewer characters leave a larger residual CSP and
+  // are usually much more expensive. Keep partitions contiguous (so shard
+  // concatenation remains exact DFS order), but balance them by a deterministic
+  // squared residual-size estimate rather than by raw candidate count.
+  const weights = new Float64Array(domain.length);
+  let totalWeight = 0;
+  for (let index = 0; index < domain.length; index += 1) {
+    const assignedCharacters = domain[index].assignments.length >>> 1;
+    const remainingCharacters = Math.max(1, r - assignedCharacters);
+    const weight = remainingCharacters * remainingCharacters;
+    weights[index] = weight;
+    totalWeight += weight;
+  }
+
+  const boundary = (partitionIndex: number): number => {
+    if (partitionIndex <= 0) return 0;
+    if (partitionIndex >= partition.count) return domain.length;
+    const target = totalWeight * partitionIndex / partition.count;
+    let cumulative = 0;
+    for (let index = 0; index < weights.length; index += 1) {
+      cumulative += weights[index];
+      if (cumulative >= target) return index + 1;
+    }
+    return domain.length;
+  };
+
+  return [boundary(partition.index), boundary(partition.index + 1)];
+}
+
 export function* iterFastDownsets(
   rInput: number,
   residuesInput: readonly number[],
@@ -320,8 +356,7 @@ export function* iterFastDownsets(
         let branchStart = 0;
         let branchEnd = bestDomain.length;
         if (partitionPending && rootPartition) {
-          branchStart = Math.floor(bestDomain.length * rootPartition.index / rootPartition.count);
-          branchEnd = Math.floor(bestDomain.length * (rootPartition.index + 1) / rootPartition.count);
+          [branchStart, branchEnd] = weightedRootPartitionBounds(bestDomain, r, rootPartition);
         }
         for (let branchIndex = branchStart; branchIndex < branchEnd; branchIndex += 1) {
           const branchMark = undoStack.length;
