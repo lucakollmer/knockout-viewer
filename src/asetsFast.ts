@@ -32,16 +32,6 @@ function maybeCancel(cancelCheck?: CancelCheck): void {
   if (cancelCheck?.()) throw new CancelledError();
 }
 
-function comparePoint(first: Point, second: Point): number {
-  return first[0] - second[0] || first[1] - second[1] || first[2] - second[2];
-}
-
-function comparePointByDegree(first: Point, second: Point): number {
-  const firstDegree = first[0] + first[1] + first[2];
-  const secondDegree = second[0] + second[1] + second[2];
-  return firstDegree - secondDegree || comparePoint(first, second);
-}
-
 export function buildFastModulusContext(r: number, cancelCheck?: CancelCheck): FastModulusContext {
   assertExactRuntimeModulus(r);
 
@@ -84,17 +74,26 @@ export function buildFastModulusContext(r: number, cancelCheck?: CancelCheck): F
     if ((pointId & 127) === 0) maybeCancel(cancelCheck);
   }
 
-  // Every emitted downset is sorted by this same degree/lexicographic order.
-  // Precompute ranks once so the search can maintain a selected-rank bitset and
-  // avoid sorting r Point objects for every completed solution.
-  const rankedPointIds = Array.from({ length: points.length }, (_, pointId) => pointId)
-    .sort((firstId, secondId) => comparePointByDegree(points[firstId], points[secondId]));
+  // Point generation is already lexicographic in x/y/z. Stable degree buckets
+  // therefore produce the exact degree/lexicographic order without an O(n log n)
+  // comparison sort.
+  const degreeCounts = new Uint32Array(r);
+  for (const point of points) degreeCounts[point[0] + point[1] + point[2]] += 1;
+  const nextRankByDegree = new Uint32Array(r);
+  let rankOffset = 0;
+  for (let degree = 0; degree < r; degree += 1) {
+    nextRankByDegree[degree] = rankOffset;
+    rankOffset += degreeCounts[degree];
+  }
   const pointRanks = new Uint32Array(points.length);
   const pointsByRank: Point[] = new Array(points.length);
-  for (let rank = 0; rank < rankedPointIds.length; rank += 1) {
-    const pointId = rankedPointIds[rank];
+  for (let pointId = 0; pointId < points.length; pointId += 1) {
+    const point = points[pointId];
+    const degree = point[0] + point[1] + point[2];
+    const rank = nextRankByDegree[degree];
+    nextRankByDegree[degree] = rank + 1;
     pointRanks[pointId] = rank;
-    pointsByRank[rank] = points[pointId];
+    pointsByRank[rank] = point;
   }
 
   return { r, points, boxPointIds, pointRanks, pointsByRank };
