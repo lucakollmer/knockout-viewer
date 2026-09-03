@@ -28,6 +28,13 @@ type FastCandidate = {
   assignments: readonly number[];
 };
 
+type FastPartitionTask = {
+  path: readonly number[];
+  weight: number;
+};
+
+const PARTITION_PREFIX_DEPTH = 2;
+
 function maybeCancel(cancelCheck?: CancelCheck): void {
   if (cancelCheck?.()) throw new CancelledError();
 }
@@ -268,48 +275,137 @@ export function* iterFastDownsets(
     return downset;
   };
 
-  function* search(partitionPending: boolean): Generator<readonly Point[]> {
+  const selectDomain = (): { character: number; domain: FastCandidate[] } | null => {
+    let bestCharacter = -1;
+    let bestDomain: FastCandidate[] | null = null;
+    let scratchDomain: FastCandidate[] = [];
+    for (let chi = 1; chi < r; chi += 1) {
+      if (assigned[chi] !== 0) continue;
+      scratchDomain.length = 0;
+      let cutOff = false;
+      for (const candidate of candidates[chi]) {
+        if (!compatible(candidate)) continue;
+        scratchDomain.push(candidate);
+        // Characters are visited in ascending order, so an equal-sized later
+        // domain cannot win the deterministic MRV tie-break. Stop as soon as
+        // it is known not to beat the current best domain.
+        if (bestDomain !== null && scratchDomain.length >= bestDomain.length) {
+          cutOff = true;
+          break;
+        }
+      }
+      if (!cutOff && scratchDomain.length === 0) return null;
+      if (cutOff) continue;
+      if (bestDomain === null || scratchDomain.length < bestDomain.length) {
+        bestCharacter = chi;
+        const previousBest = bestDomain;
+        bestDomain = scratchDomain;
+        scratchDomain = previousBest ?? [];
+      }
+      if (bestDomain.length === 1) break;
+    }
+    if (bestDomain === null || bestCharacter < 0) return null;
+    return { character: bestCharacter, domain: bestDomain };
+  };
+
+  const planPartitionTasks = (): FastPartitionTask[] => {
+    const tasks: FastPartitionTask[] = [];
+
+    const plan = (path: readonly number[]): void => {
+      maybeCancel(options.cancelCheck);
+      const frameMark = undoStack.length;
+      try {
+        while (true) {
+          if (assignedCount === r) {
+            tasks.push({ path: [...path], weight: 1 });
+            return;
+          }
+
+          const selection = selectDomain();
+          if (!selection) return;
+          const domain = selection.domain;
+          if (domain.length === 1) {
+            apply(domain[0]);
+            continue;
+          }
+
+          if (path.length >= PARTITION_PREFIX_DEPTH) {
+            const residualCharacters = Math.max(1, r - assignedCount);
+            tasks.push({
+              path: [...path],
+              weight: Math.max(1, domain.length * residualCharacters),
+            });
+            return;
+          }
+
+          for (let branchIndex = 0; branchIndex < domain.length; branchIndex += 1) {
+            const branchMark = undoStack.length;
+            apply(domain[branchIndex]);
+            try {
+              plan([...path, branchIndex]);
+            } finally {
+              undoTo(branchMark);
+            }
+          }
+          return;
+        }
+      } finally {
+        undoTo(frameMark);
+      }
+    };
+
+    plan([]);
+    return tasks;
+  };
+
+  const partitionTaskRange = (
+    tasks: readonly FastPartitionTask[],
+    partition: FastRootPartition,
+  ): readonly [number, number] => {
+    if (tasks.length === 0) return [0, 0];
+    const prefixWeights = new Float64Array(tasks.length + 1);
+    for (let index = 0; index < tasks.length; index += 1) {
+      prefixWeights[index + 1] = prefixWeights[index] + tasks[index].weight;
+    }
+    const totalWeight = prefixWeights[tasks.length];
+
+    const boundary = (part: number): number => {
+      if (part <= 0) return 0;
+      if (part >= partition.count) return tasks.length;
+      const target = totalWeight * part / partition.count;
+      let low = 0;
+      let high = tasks.length;
+      while (low < high) {
+        const middle = (low + high) >>> 1;
+        if (prefixWeights[middle] < target) low = middle + 1;
+        else high = middle;
+      }
+      return low;
+    };
+
+    return [boundary(partition.index), boundary(partition.index + 1)];
+  };
+
+  function* search(
+    branchPath: readonly number[] | null,
+    branchDepth: number,
+  ): Generator<readonly Point[]> {
     if (options.metrics) options.metrics.nodes += 1;
     maybeCancel(options.cancelCheck);
     const frameMark = undoStack.length;
     try {
       while (true) {
         if (assignedCount === r) {
-          // A family with no non-singleton branch belongs to partition zero only.
-          if (!partitionPending || !rootPartition || rootPartition.index === 0) yield emit();
+          if (branchPath && branchDepth < branchPath.length) {
+            throw new Error('internal fast CSP partition path ended before planned branch');
+          }
+          yield emit();
           return;
         }
 
-        let bestCharacter = -1;
-        let bestDomain: FastCandidate[] | null = null;
-        let scratchDomain: FastCandidate[] = [];
-        for (let chi = 1; chi < r; chi += 1) {
-          if (assigned[chi] !== 0) continue;
-          scratchDomain.length = 0;
-          let cutOff = false;
-          for (const candidate of candidates[chi]) {
-            if (!compatible(candidate)) continue;
-            scratchDomain.push(candidate);
-            // Characters are visited in ascending order, so an equal-sized later
-            // domain cannot win the deterministic MRV tie-break. Stop as soon as
-            // it is known not to beat the current best domain.
-            if (bestDomain !== null && scratchDomain.length >= bestDomain.length) {
-              cutOff = true;
-              break;
-            }
-          }
-          if (!cutOff && scratchDomain.length === 0) return;
-          if (cutOff) continue;
-          if (bestDomain === null || scratchDomain.length < bestDomain.length) {
-            bestCharacter = chi;
-            const previousBest = bestDomain;
-            bestDomain = scratchDomain;
-            scratchDomain = previousBest ?? [];
-          }
-          if (bestDomain.length === 1) break;
-        }
-
-        if (bestDomain === null || bestCharacter < 0) throw new Error('internal fast CSP domain failure');
+        const selection = selectDomain();
+        if (!selection) return;
+        const bestDomain = selection.domain;
         if (bestDomain.length === 1) {
           apply(bestDomain[0]);
           if (options.metrics) options.metrics.singletonPropagations += 1;
@@ -317,17 +413,26 @@ export function* iterFastDownsets(
         }
 
         if (options.metrics) options.metrics.branches += 1;
-        let branchStart = 0;
-        let branchEnd = bestDomain.length;
-        if (partitionPending && rootPartition) {
-          branchStart = Math.floor(bestDomain.length * rootPartition.index / rootPartition.count);
-          branchEnd = Math.floor(bestDomain.length * (rootPartition.index + 1) / rootPartition.count);
-        }
-        for (let branchIndex = branchStart; branchIndex < branchEnd; branchIndex += 1) {
+        if (branchPath && branchDepth < branchPath.length) {
+          const branchIndex = branchPath[branchDepth];
+          if (!Number.isSafeInteger(branchIndex) || branchIndex < 0 || branchIndex >= bestDomain.length) {
+            throw new Error('internal fast CSP partition path mismatch');
+          }
           const branchMark = undoStack.length;
           apply(bestDomain[branchIndex]);
           try {
-            yield* search(false);
+            yield* search(branchPath, branchDepth + 1);
+          } finally {
+            undoTo(branchMark);
+          }
+          return;
+        }
+
+        for (let branchIndex = 0; branchIndex < bestDomain.length; branchIndex += 1) {
+          const branchMark = undoStack.length;
+          apply(bestDomain[branchIndex]);
+          try {
+            yield* search(branchPath, branchDepth);
           } finally {
             undoTo(branchMark);
           }
@@ -339,7 +444,15 @@ export function* iterFastDownsets(
     }
   }
 
-  yield* search(true);
+  if (rootPartition) {
+    const tasks = planPartitionTasks();
+    const [taskStart, taskEnd] = partitionTaskRange(tasks, rootPartition);
+    for (let taskIndex = taskStart; taskIndex < taskEnd; taskIndex += 1) {
+      yield* search(tasks[taskIndex].path, 0);
+    }
+  } else {
+    yield* search(null, 0);
+  }
 }
 
 export function enumerateFastDownsets(
