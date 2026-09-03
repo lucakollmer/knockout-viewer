@@ -42,41 +42,40 @@ function comparePointByDegree(first: Point, second: Point): number {
   return firstDegree - secondDegree || comparePoint(first, second);
 }
 
-function coordinateKey(x: number, y: number, z: number, r: number): number {
-  return (x * r + y) * r + z;
-}
-
 export function buildFastModulusContext(r: number, cancelCheck?: CancelCheck): FastModulusContext {
   assertExactRuntimeModulus(r);
 
   const points: Point[] = [];
-  const pointIds = new Map<number, number>();
+  // Points are emitted in x/y/z blocks. Record the exact start ID of every
+  // valid (x,y) block so downward-box IDs can be computed as start + z, avoiding
+  // a hash-map lookup for every cell in every box.
+  const pointStartsByXY: Uint32Array[] = new Array(r);
   for (let x = 0; x < r; x += 1) {
-    for (let y = 0; y < r; y += 1) {
-      const xy = (x + 1) * (y + 1);
-      if (xy > r) break;
-      const maxZ = Math.floor(r / xy) - 1;
-      for (let z = 0; z <= maxZ; z += 1) {
-        const pointId = points.length;
-        points.push([x, y, z]);
-        pointIds.set(coordinateKey(x, y, z, r), pointId);
-      }
+    const yCount = Math.floor(r / (x + 1));
+    const yStarts = new Uint32Array(yCount);
+    for (let y = 0; y < yCount; y += 1) {
+      yStarts[y] = points.length;
+      const zCount = Math.floor(r / ((x + 1) * (y + 1)));
+      for (let z = 0; z < zCount; z += 1) points.push([x, y, z]);
     }
+    pointStartsByXY[x] = yStarts;
+    if ((x & 31) === 0) maybeCancel(cancelCheck);
   }
 
-  // Sparse coordinate lookup avoids the old O(r^3) temporary dense table.
-  // Uint32 IDs remove the former 65,535-point representation ceiling.
+  // Uint32 IDs remove the former 65,535-point representation ceiling. Every
+  // coordinate in a point's downward box is valid, and its ID is the precomputed
+  // (x,y) block start plus z.
   const boxPointIds: Uint32Array[] = new Array(points.length);
   for (let pointId = 0; pointId < points.length; pointId += 1) {
     const [x, y, z] = points[pointId];
     const ids = new Uint32Array((x + 1) * (y + 1) * (z + 1));
     let index = 0;
     for (let i = 0; i <= x; i += 1) {
+      const yStarts = pointStartsByXY[i];
       for (let j = 0; j <= y; j += 1) {
+        const start = yStarts[j];
         for (let k = 0; k <= z; k += 1) {
-          const encoded = pointIds.get(coordinateKey(i, j, k, r));
-          if (encoded === undefined) throw new Error('internal fast modulus point lookup failure');
-          ids[index] = encoded;
+          ids[index] = start + k;
           index += 1;
         }
       }
