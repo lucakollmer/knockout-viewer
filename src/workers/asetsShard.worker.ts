@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-import type { DownsetRecord } from '../asetsCore';
+import { createSearchMetrics, type DownsetRecord } from '../asetsCore';
 import { createFamilyGeometryContext, geometryRecordCached } from '../asetsGeometry';
 import { buildFastModulusContext, iterFastDownsets } from '../asetsFast';
 import type {
@@ -20,9 +20,11 @@ self.onmessage = (event: MessageEvent<AsetsShardRequest>) => {
     const modulusContext = buildFastModulusContext(request.r);
     const modulusContextSetupMs = performance.now() - contextStart;
     const geometryContext = createFamilyGeometryContext(request.r, request.residues);
+    const metrics = createSearchMetrics();
     const iterator = iterFastDownsets(request.r, request.residues, {
       modulusContext,
       rootPartition: { index: request.shardIndex, count: request.shardCount },
+      metrics,
     });
 
     let candidateCspEnumerationMs = 0;
@@ -60,6 +62,11 @@ self.onmessage = (event: MessageEvent<AsetsShardRequest>) => {
         candidateCspEnumerationMs,
         geometryMs,
         totalWorkerComputeMs: performance.now() - wallStart,
+        nodes: metrics.nodes,
+        compatibilityChecks: metrics.compatibilityChecks,
+        singletonPropagations: metrics.singletonPropagations,
+        branches: metrics.branches,
+        candidateCount: metrics.candidateCount,
       },
     };
     post(complete);
