@@ -21,11 +21,21 @@ export type FastRootPartition = {
 };
 
 type FastCandidate = {
+  id: number;
+  ownerCharacter: number;
   pointId: number;
   // Interleaved [character, encodedPointId] pairs. encodedPointId is pointId + 1,
-  // matching assigned[] so the hot compatibility/apply loops walk one array and
-  // avoid a per-entry conversion.
+  // matching assigned[] so the hot apply/undo loops walk one array and avoid a
+  // per-entry conversion.
   assignments: readonly number[];
+};
+
+type FastCandidateSet = {
+  buckets: readonly (readonly FastCandidate[])[];
+  all: readonly FastCandidate[];
+  // For each assigned character, interleaved [candidateId, encodedPointId]
+  // references for every candidate that constrains that character.
+  assignmentRefs: readonly Uint32Array[];
 };
 
 function maybeCancel(cancelCheck?: CancelCheck): void {
@@ -104,7 +114,7 @@ function familyCandidatesFast(
   residues: Point,
   cancelCheck?: CancelCheck,
   metrics?: SearchMetrics,
-): readonly (readonly FastCandidate[])[] {
+): FastCandidateSet {
   const { r, points, boxPointIds, pointRanks } = context;
   const characters = new Uint32Array(points.length);
   for (let pointId = 0; pointId < points.length; pointId += 1) {
@@ -143,7 +153,10 @@ function familyCandidatesFast(
     }
 
     if (valid) {
-      buckets[characters[pointId]].push({
+      const ownerCharacter = characters[pointId];
+      buckets[ownerCharacter].push({
+        id: -1,
+        ownerCharacter,
         pointId,
         assignments,
       });
@@ -151,11 +164,43 @@ function familyCandidatesFast(
     if ((pointId & 127) === 0) maybeCancel(cancelCheck);
   }
 
-  for (const bucket of buckets) {
+  const all: FastCandidate[] = [];
+  for (let chi = 0; chi < r; chi += 1) {
+    const bucket = buckets[chi];
     bucket.sort((first, second) => pointRanks[first.pointId] - pointRanks[second.pointId]);
+    for (const candidate of bucket) {
+      candidate.id = all.length;
+      all.push(candidate);
+    }
   }
-  if (metrics) metrics.candidateCount = buckets.reduce((total, bucket) => total + bucket.length, 0);
-  return buckets;
+  if (metrics) metrics.candidateCount = all.length;
+
+  // Build a compact inverted index once. Search then updates candidate conflict
+  // counts only when an assignment changes, rather than re-walking every
+  // candidate's assignments during every MRV scan.
+  const refCounts = new Uint32Array(r);
+  for (const candidate of all) {
+    const assignments = candidate.assignments;
+    for (let index = 0; index < assignments.length; index += 2) {
+      refCounts[assignments[index]] += 1;
+    }
+  }
+  const assignmentRefs: Uint32Array[] = new Array(r);
+  const refOffsets = new Uint32Array(r);
+  for (let chi = 0; chi < r; chi += 1) assignmentRefs[chi] = new Uint32Array(refCounts[chi] * 2);
+  for (const candidate of all) {
+    const assignments = candidate.assignments;
+    for (let index = 0; index < assignments.length; index += 2) {
+      const chi = assignments[index];
+      const offset = refOffsets[chi];
+      const refs = assignmentRefs[chi];
+      refs[offset] = candidate.id;
+      refs[offset + 1] = assignments[index + 1];
+      refOffsets[chi] = offset + 2;
+    }
+  }
+
+  return { buckets, all, assignmentRefs };
 }
 
 export function* iterFastDownsets(
@@ -188,12 +233,16 @@ export function* iterFastDownsets(
   const context = options.modulusContext ?? buildFastModulusContext(r, options.cancelCheck);
   if (context.r !== r) throw new Error('fast modulus context does not match r');
 
-  const candidates = familyCandidatesFast(context, residues, options.cancelCheck, options.metrics);
+  const candidateSet = familyCandidatesFast(context, residues, options.cancelCheck, options.metrics);
+  const { buckets: candidates, all: allCandidates, assignmentRefs } = candidateSet;
   const assigned = new Uint32Array(r);
   assigned[0] = 1;
   let assignedCount = 1;
   const undoStack: number[] = [];
   const selectedRankBits = new Uint32Array(Math.ceil(context.pointsByRank.length / 32));
+  const candidateConflicts = new Uint16Array(allCandidates.length);
+  const domainSizes = new Uint32Array(r);
+  for (let chi = 0; chi < r; chi += 1) domainSizes[chi] = candidates[chi].length;
 
   const markSelectedPoint = (encodedPointId: number): void => {
     const rank = context.pointRanks[encodedPointId - 1];
@@ -211,15 +260,25 @@ export function* iterFastDownsets(
 
   markSelectedPoint(1);
 
-  const compatible = (candidate: FastCandidate): boolean => {
-    if (options.metrics) options.metrics.compatibilityChecks += 1;
-    const assignments = candidate.assignments;
-    for (let index = 0; index < assignments.length; index += 2) {
-      const chi = assignments[index];
-      const current = assigned[chi];
-      if (current !== 0 && current !== assignments[index + 1]) return false;
+  const adjustCandidateConflicts = (chi: number, encodedPointId: number, delta: 1 | -1): void => {
+    const refs = assignmentRefs[chi];
+    for (let index = 0; index < refs.length; index += 2) {
+      if (refs[index + 1] === encodedPointId) continue;
+      const candidateId = refs[index];
+      const before = candidateConflicts[candidateId];
+      const ownerCharacter = allCandidates[candidateId].ownerCharacter;
+      if (delta === 1) {
+        candidateConflicts[candidateId] = before + 1;
+        if (before === 0) {
+          if (domainSizes[ownerCharacter] === 0) throw new Error('internal fast CSP domain underflow');
+          domainSizes[ownerCharacter] -= 1;
+        }
+      } else {
+        if (before === 0) throw new Error('internal fast CSP conflict underflow');
+        candidateConflicts[candidateId] = before - 1;
+        if (before === 1) domainSizes[ownerCharacter] += 1;
+      }
     }
-    return true;
   };
 
   const apply = (candidate: FastCandidate): void => {
@@ -229,6 +288,7 @@ export function* iterFastDownsets(
       if (assigned[chi] === 0) {
         const encodedPointId = assignments[index + 1];
         assigned[chi] = encodedPointId;
+        adjustCandidateConflicts(chi, encodedPointId, 1);
         markSelectedPoint(encodedPointId);
         undoStack.push(chi);
         assignedCount += 1;
@@ -242,6 +302,7 @@ export function* iterFastDownsets(
       if (chi === undefined) throw new Error('internal fast CSP undo failure');
       const encodedPointId = assigned[chi];
       if (encodedPointId === 0) throw new Error('internal fast CSP undo point failure');
+      adjustCandidateConflicts(chi, encodedPointId, -1);
       unmarkSelectedPoint(encodedPointId);
       assigned[chi] = 0;
       assignedCount -= 1;
@@ -281,35 +342,26 @@ export function* iterFastDownsets(
         }
 
         let bestCharacter = -1;
-        let bestDomain: FastCandidate[] | null = null;
-        let scratchDomain: FastCandidate[] = [];
+        let bestSize = Number.POSITIVE_INFINITY;
         for (let chi = 1; chi < r; chi += 1) {
           if (assigned[chi] !== 0) continue;
-          scratchDomain.length = 0;
-          let cutOff = false;
-          for (const candidate of candidates[chi]) {
-            if (!compatible(candidate)) continue;
-            scratchDomain.push(candidate);
-            // Characters are visited in ascending order, so an equal-sized later
-            // domain cannot win the deterministic MRV tie-break. Stop as soon as
-            // it is known not to beat the current best domain.
-            if (bestDomain !== null && scratchDomain.length >= bestDomain.length) {
-              cutOff = true;
-              break;
-            }
-          }
-          if (!cutOff && scratchDomain.length === 0) return;
-          if (cutOff) continue;
-          if (bestDomain === null || scratchDomain.length < bestDomain.length) {
+          const size = domainSizes[chi];
+          if (size === 0) return;
+          if (size < bestSize) {
             bestCharacter = chi;
-            const previousBest = bestDomain;
-            bestDomain = scratchDomain;
-            scratchDomain = previousBest ?? [];
+            bestSize = size;
+            if (size === 1) break;
           }
-          if (bestDomain.length === 1) break;
         }
+        if (bestCharacter < 0 || !Number.isFinite(bestSize)) throw new Error('internal fast CSP domain failure');
 
-        if (bestDomain === null || bestCharacter < 0) throw new Error('internal fast CSP domain failure');
+        const bestDomain: FastCandidate[] = [];
+        for (const candidate of candidates[bestCharacter]) {
+          if (options.metrics) options.metrics.compatibilityChecks += 1;
+          if (candidateConflicts[candidate.id] === 0) bestDomain.push(candidate);
+        }
+        if (bestDomain.length !== bestSize) throw new Error('internal fast CSP domain-size mismatch');
+
         if (bestDomain.length === 1) {
           apply(bestDomain[0]);
           if (options.metrics) options.metrics.singletonPropagations += 1;
