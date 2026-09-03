@@ -16,6 +16,7 @@ const PERMUTATIONS_3: readonly (readonly [number, number, number])[] = [
 ];
 
 type BenchmarkAxis = 'frontier' | 'coefficient-matrix';
+type BenchmarkScope = 'full' | 'frontier' | 'matrix';
 
 type Profile = {
   id: string;
@@ -418,6 +419,8 @@ export default function AsetsFrontierBenchmarkPage() {
   const [matrixScenarios, setMatrixScenarios] = useState<ScenarioResult[]>([]);
   const [stored, setStored] = useState<StoredResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const scopeRaw = new URL(window.location.href).searchParams.get('scope');
+  const benchmarkScope: BenchmarkScope = scopeRaw === 'matrix' || scopeRaw === 'frontier' ? scopeRaw : 'full';
 
   const run = async () => {
     if (runningRef.current) return;
@@ -484,29 +487,33 @@ export default function AsetsFrontierBenchmarkPage() {
     };
 
     try {
-      let r = 100;
-      let growthSteps = 0;
-      while (growthSteps < 7) {
-        const observation = await evaluateR(r);
-        growthSteps += 1;
-        if (!observation.passed_5s || r >= maxR) break;
-        const next = Math.min(maxR, Math.ceil((r * 1.35) / 5) * 5);
-        if (next === r) break;
-        r = next;
+      if (benchmarkScope !== 'matrix') {
+        let r = 100;
+        let growthSteps = 0;
+        while (growthSteps < 7) {
+          const observation = await evaluateR(r);
+          growthSteps += 1;
+          if (!observation.passed_5s || r >= maxR) break;
+          const next = Math.min(maxR, Math.ceil((r * 1.35) / 5) * 5);
+          if (next === r) break;
+          r = next;
+        }
+
+        await refine(5_000, 4);
+        await refine(1_000, 4);
       }
 
-      await refine(5_000, 4);
-      await refine(1_000, 4);
-
       const matrixRs = [...new Set(MATRIX_R_TARGETS.map((value) => Math.min(maxR, value)))];
-      for (const matrixR of matrixRs) {
-        for (const profile of MATRIX_PROFILES) {
-          if (allScenarios.length >= MAX_SCENARIOS) break;
-          setStatus(`coefficient matrix r=${matrixR} — ${profile.label}`);
-          const result = await runCase(runId, 'coefficient-matrix', profile, matrixR, requestId++);
-          matrixResults.push(result);
-          allScenarios.push(result);
-          setMatrixScenarios([...matrixResults]);
+      if (benchmarkScope !== 'frontier') {
+        for (const matrixR of matrixRs) {
+          for (const profile of MATRIX_PROFILES) {
+            if (allScenarios.length >= MAX_SCENARIOS) break;
+            setStatus(`coefficient matrix r=${matrixR} — ${profile.label}`);
+            const result = await runCase(runId, 'coefficient-matrix', profile, matrixR, requestId++);
+            matrixResults.push(result);
+            allScenarios.push(result);
+            setMatrixScenarios([...matrixResults]);
+          }
         }
       }
 
@@ -533,6 +540,7 @@ export default function AsetsFrontierBenchmarkPage() {
           suite: 'interactive-asets-v1',
           harness_version: 4,
           benchmark_kind: 'adaptive-r-frontier+coefficient-symmetry-matrix',
+          benchmark_scope: benchmarkScope,
           case_timeout_ms: CASE_TIMEOUT_MS,
           event_loop_sample_ms: EVENT_LOOP_SAMPLE_MS,
           safety_stop: null,
@@ -582,7 +590,7 @@ export default function AsetsFrontierBenchmarkPage() {
     <main style={{ maxWidth: 1180, margin: '0 auto', padding: 24, fontFamily: 'system-ui, sans-serif' }}>
       <h1 style={{ marginBottom: 4 }}>Asets adaptive frontier + coefficient-symmetry benchmark</h1>
       <p style={{ marginTop: 0, color: '#666' }}>
-        Retains the historical r-frontier profiles, then measures fixed high-r families across distinct coefficient-symmetry classes.
+        Scope: {benchmarkScope}. The historical r-frontier and fixed high-r coefficient matrix can be run independently or together.
       </p>
       <p><b>Status:</b> {status} · <b>elapsed:</b> {(elapsedMs / 1000).toFixed(1)} s</p>
       <p><b>1 s legacy envelope:</b> {frontier1s.largest_tested_passing_r ?? '—'} {frontier1s.smallest_tested_failing_r ? `(next tested fail ${frontier1s.smallest_tested_failing_r})` : ''}</p>
