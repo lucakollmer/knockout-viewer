@@ -76,14 +76,11 @@ function mod(value: number, r: number): number {
 
 function coefficientStructure(r: number, residues: Point): {
   stabilizerSize: number;
-  repeatedPairCount: number;
   oppositePairCount: number;
 } {
-  let repeatedPairCount = 0;
   let oppositePairCount = 0;
   for (let first = 0; first < 3; first += 1) {
     for (let second = first + 1; second < 3; second += 1) {
-      if (residues[first] === residues[second]) repeatedPairCount += 1;
       if (mod(residues[first] + residues[second], r) === 0) oppositePairCount += 1;
     }
   }
@@ -103,7 +100,7 @@ function coefficientStructure(r: number, residues: Point): {
       if (matches) stabilizerSize += 1;
     }
   }
-  return { stabilizerSize, repeatedPairCount, oppositePairCount };
+  return { stabilizerSize, oppositePairCount };
 }
 
 function openCache(): Promise<IDBDatabase | null> {
@@ -185,7 +182,6 @@ const emptyPerformance = (): AsetsPerformance => ({
   indexedDbWriteMs: 0,
   peakUsedJsHeapBytes: null,
   parallelShards: 1,
-  parallelProbeRecords: 0,
 });
 
 function heapBytes(): number | null {
