@@ -355,20 +355,18 @@ function trySupportingNormalsFromWitness(
   for (let index = 0; index < hull.length; index += 1) {
     const firstId = hull[index].rowId;
     const secondId = hull[(index + 1) % hull.length].rowId;
+    const thirdId = hull[(index + 2) % hull.length].rowId;
     const lineId = lineForPair(context, firstId, secondId);
     if (lineId < 0) return null;
     const line = context.linePoints[lineId];
-    let positive = false;
-    let negative = false;
-    for (const rowId of rowIds) {
-      const value = dot(line, context.rowPoints[rowId]);
-      if (value > 0) positive = true;
-      else if (value < 0) negative = true;
-      if (positive && negative) return null;
-    }
-    if (!negative) normals.push({ lineId, sign: 1, point: line });
-    else if (!positive) normals.push({ lineId, sign: -1, point: [-line[0], -line[1], -line[2]] });
-    else return null;
+    // The convex-hull construction already proves that every projected row is on
+    // one side of this edge. Because witness·row is strictly positive, that side
+    // is preserved before projection. A non-collinear next hull vertex therefore
+    // fixes the exact inward sign without rescanning all transition rows.
+    const side = dot(line, context.rowPoints[thirdId]);
+    if (side === 0) return null;
+    if (side > 0) normals.push({ lineId, sign: 1, point: line });
+    else normals.push({ lineId, sign: -1, point: [-line[0], -line[1], -line[2]] });
   }
   normals.sort((first, second) => comparePoint(first.point, second.point));
 
@@ -378,6 +376,8 @@ function trySupportingNormalsFromWitness(
     candidate[1] += normal.point[1];
     candidate[2] += normal.point[2];
   }
+  // Retain one global exact fail-closed verification. This protects the shortcut
+  // against any future projection/hull degeneracy without restoring O(h*m) scans.
   if (!rowIds.every((rowId) => dot(context.rowPoints[rowId], candidate) > 0)) return null;
   return normals;
 }
