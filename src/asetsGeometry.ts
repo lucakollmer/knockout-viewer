@@ -22,6 +22,7 @@ export type FamilyGeometryContext = {
   quotientScales: number[];
   betaPoints: Array<Point | undefined>;
   characterEpochs: Uint32Array;
+  pointStates: Map<Point, number>;
   rowEpochs: Uint32Array;
   recordEpoch: number;
   linePositiveWitnesses: number[];
@@ -57,6 +58,7 @@ export function createFamilyGeometryContext(r: number, residues: Point): FamilyG
     quotientScales: [],
     betaPoints: new Array<Point | undefined>(r),
     characterEpochs: new Uint32Array(r),
+    pointStates: new Map(),
     rowEpochs: new Uint32Array(16),
     recordEpoch: 0,
     linePositiveWitnesses: [],
@@ -231,7 +233,7 @@ function markRow(context: FamilyGeometryContext, rowId: number, epoch: number, r
   rowIds.push(rowId);
 }
 
-type RowsWithIds = { rows: Point[]; rowIds: number[]; epoch: number };
+type RowsWithIds = { rows: Point[]; rowIds: number[]; epoch: number; activeMask: number };
 
 function transitionRowsCached(
   downset: readonly Point[], residues: Point, r: number, context: FamilyGeometryContext,
@@ -239,8 +241,20 @@ function transitionRowsCached(
   if (downset.length !== r) throw new Error('downset character map is not surjective');
   const epoch = nextRecordEpoch(context);
   const beta = context.betaPoints;
+  let activeMask = 0;
   for (const point of downset) {
-    const chi = (point[0] * residues[0] + point[1] * residues[1] + point[2] * residues[2]) % r;
+    let state = context.pointStates.get(point);
+    if (state === undefined) {
+      const chi = (point[0] * residues[0] + point[1] * residues[1] + point[2] * residues[2]) % r;
+      let pointMask = 0;
+      if (point[0] !== 0) pointMask |= 1;
+      if (point[1] !== 0) pointMask |= 2;
+      if (point[2] !== 0) pointMask |= 4;
+      state = chi * 8 + pointMask;
+      context.pointStates.set(point, state);
+    }
+    const chi = Math.floor(state / 8);
+    activeMask |= state & 7;
     if (context.characterEpochs[chi] === epoch) throw new Error('downset character map is not injective');
     context.characterEpochs[chi] = epoch;
     beta[chi] = point;
@@ -261,7 +275,7 @@ function transitionRowsCached(
     }
   }
   rowIds.sort((first, second) => comparePoint(context.rowPoints[first], context.rowPoints[second]));
-  return { rows: rowIds.map((rowId) => context.rowPoints[rowId]), rowIds, epoch };
+  return { rows: rowIds.map((rowId) => context.rowPoints[rowId]), rowIds, epoch, activeMask };
 }
 
 type Normal = { lineId: number; sign: 1 | -1; point: Point };
@@ -490,7 +504,7 @@ export function geometryRecordCached(
   if (context.r !== r || context.residues.some((value, axis) => value !== residues[axis])) {
     throw new Error('family geometry context does not match r/residues');
   }
-  const { rows, rowIds, epoch } = transitionRowsCached(downset, residues, r, context);
+  const { rows, rowIds, epoch, activeMask } = transitionRowsCached(downset, residues, r, context);
   const normals = supportingNormalsCached(rowIds, context, epoch);
 
   let coherent = false;
@@ -512,12 +526,6 @@ export function geometryRecordCached(
   }
   context.previousCoherentWitness = coherent ? witness : null;
 
-  let activeMask = 0;
-  for (const point of downset) {
-    if (point[0] !== 0) activeMask |= 1;
-    if (point[1] !== 0) activeMask |= 2;
-    if (point[2] !== 0) activeMask |= 4;
-  }
   const activeAxes: number[] = [];
   const inactiveAxes: number[] = [];
   for (let axis = 0; axis < 3; axis += 1) (((activeMask >> axis) & 1) ? activeAxes : inactiveAxes).push(axis);
