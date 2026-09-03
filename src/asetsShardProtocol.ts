@@ -13,6 +13,11 @@ export type AsetsShardPerformance = {
   candidateCspEnumerationMs: number;
   geometryMs: number;
   totalWorkerComputeMs: number;
+  nodes: number;
+  compatibilityChecks: number;
+  singletonPropagations: number;
+  branches: number;
+  candidateCount: number;
 };
 
 export type AsetsShardChunk = {
