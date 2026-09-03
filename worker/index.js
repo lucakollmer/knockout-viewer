@@ -1,5 +1,6 @@
 const MAX_BENCHMARK_BYTES = 512 * 1024;
 const BENCHMARK_TTL_SECONDS = 60 * 60 * 24 * 30;
+const MAX_BENCHMARK_SCENARIOS = 64;
 const KEY_PREFIX = 'knockout:';
 
 function json(data, status = 200) {
@@ -35,7 +36,7 @@ function validateBenchmark(payload) {
   if (payload.benchmark?.suite !== 'interactive-asets-v1') throw new Error('Invalid benchmark suite.');
   if (!Number.isFinite(payload.benchmark?.case_timeout_ms) || payload.benchmark.case_timeout_ms < 1000) throw new Error('Invalid benchmark timeout.');
   const scenarios = payload.benchmark?.scenarios;
-  if (!Array.isArray(scenarios) || scenarios.length < 1 || scenarios.length > 32) throw new Error('Invalid benchmark scenarios.');
+  if (!Array.isArray(scenarios) || scenarios.length < 1 || scenarios.length > MAX_BENCHMARK_SCENARIOS) throw new Error('Invalid benchmark scenarios.');
   for (const scenario of scenarios) if (!validScenario(scenario)) throw new Error(`Invalid benchmark scenario ${scenario?.id ?? '?'}.`);
 }
 
