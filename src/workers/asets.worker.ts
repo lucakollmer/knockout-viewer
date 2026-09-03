@@ -18,6 +18,7 @@ import type {
   AsetsFamilyHeader,
   AsetsFamilyKey,
   AsetsGroupTransform,
+  AsetsParallelShardTelemetry,
   AsetsPerformance,
   AsetsWorkerMessage,
   AsetsWorkerRequest,
@@ -41,7 +42,7 @@ const CACHE_CHUNK_SIZE = 64;
 const MODULUS_CONTEXT_CACHE_LIMIT = 3;
 const PARALLEL_MIN_R = 410;
 const GENERIC_PARALLEL_MIN_R = 700;
-const MAX_PARALLEL_SHARDS = 4;
+const MAX_PARALLEL_SHARDS = 8;
 const PERMUTATIONS_3: readonly (readonly [number, number, number])[] = [
   [0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0],
 ];
@@ -228,8 +229,13 @@ function parallelShardCount(r: number, residues: Point): number {
   const structuredHardCase = structure.stabilizerSize === 1 && structure.oppositePairCount > 0;
   const highRLowSymmetry = r >= GENERIC_PARALLEL_MIN_R && structure.stabilizerSize <= 2;
   if (!structuredHardCase && !highRLowSymmetry) return 1;
-  return Math.min(MAX_PARALLEL_SHARDS, hardwareConcurrency >= 8 ? 4 : 2);
+  return Math.min(MAX_PARALLEL_SHARDS, hardwareConcurrency >= 16 ? 8 : hardwareConcurrency >= 8 ? 4 : 2);
 }
+
+type ParallelFamilyPerformance = {
+  critical: AsetsShardPerformance;
+  telemetry: readonly AsetsParallelShardTelemetry[];
+};
 
 async function runParallelFamily(
   r: number,
@@ -237,8 +243,8 @@ async function runParallelFamily(
   shardCount: number,
   token: number,
   acceptRecords: (records: readonly DownsetRecord[]) => void,
-): Promise<AsetsShardPerformance> {
-  return new Promise<AsetsShardPerformance>((resolve, reject) => {
+): Promise<ParallelFamilyPerformance> {
+  return new Promise<ParallelFamilyPerformance>((resolve, reject) => {
     const workers: Worker[] = [];
     const buffers: Array<Array<readonly DownsetRecord[]>> = Array.from({ length: shardCount }, () => []);
     const completed = new Uint8Array(shardCount);
@@ -298,17 +304,19 @@ async function runParallelFamily(
         fail(new Error('internal Asets shard performance missing'));
         return;
       }
-      for (let index = 1; index < performances.length; index += 1) {
+      const telemetry: AsetsParallelShardTelemetry[] = [];
+      for (let index = 0; index < performances.length; index += 1) {
         const candidate = performances[index];
         if (!candidate) {
           fail(new Error('internal Asets shard performance missing'));
           return;
         }
         if (candidate.totalWorkerComputeMs > critical.totalWorkerComputeMs) critical = candidate;
+        telemetry.push({ shardIndex: index, recordCount: reportedCounts[index], ...candidate });
       }
       settled = true;
       cleanup();
-      resolve(critical);
+      resolve({ critical, telemetry });
     };
 
     const cancel = () => fail(new CancelledError());
@@ -482,10 +490,11 @@ async function computeAndCache(request: AsetsComputeRequest, token: number): Pro
   post({ type: 'status', requestId: request.requestId, phase: 'context', familyKey: key, certificate: normalized.certificate, emittedRecords: 0 });
   if (shardCount > 1) {
     post({ type: 'status', requestId: request.requestId, phase: 'compute', familyKey: key, certificate: normalized.certificate, emittedRecords: 0 });
-    const critical = await runParallelFamily(normalized.r, normalized.residues, shardCount, token, acceptRecords);
-    performanceData.modulusContextSetupMs = critical.modulusContextSetupMs;
-    performanceData.candidateCspEnumerationMs = critical.candidateCspEnumerationMs;
-    performanceData.geometryMs = critical.geometryMs;
+    const parallel = await runParallelFamily(normalized.r, normalized.residues, shardCount, token, acceptRecords);
+    performanceData.modulusContextSetupMs = parallel.critical.modulusContextSetupMs;
+    performanceData.candidateCspEnumerationMs = parallel.critical.candidateCspEnumerationMs;
+    performanceData.geometryMs = parallel.critical.geometryMs;
+    performanceData.parallelShardTelemetry = parallel.telemetry;
   } else {
     let context = modulusContexts.get(normalized.r);
     if (context) {
