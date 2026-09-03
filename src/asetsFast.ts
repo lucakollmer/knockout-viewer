@@ -192,6 +192,11 @@ export function* iterFastDownsets(
     ((residuesInput[1] % r) + r) % r,
     ((residuesInput[2] % r) + r) % r,
   ];
+  const hasOppositePair = (
+    (residues[0] + residues[1]) % r === 0
+    || (residues[0] + residues[2]) % r === 0
+    || (residues[1] + residues[2]) % r === 0
+  );
   const context = options.modulusContext ?? buildFastModulusContext(r, options.cancelCheck);
   if (context.r !== r) throw new Error('fast modulus context does not match r');
 
@@ -389,6 +394,7 @@ export function* iterFastDownsets(
   function* search(
     branchPath: readonly number[] | null,
     branchDepth: number,
+    legacyPartitionPending: boolean,
   ): Generator<readonly Point[]> {
     if (options.metrics) options.metrics.nodes += 1;
     maybeCancel(options.cancelCheck);
@@ -399,6 +405,10 @@ export function* iterFastDownsets(
           if (branchPath && branchDepth < branchPath.length) {
             throw new Error('internal fast CSP partition path ended before planned branch');
           }
+          // Preserve the original root-partition convention for families that
+          // do not use deep prefix tasks: an entirely singleton family belongs
+          // to partition zero only.
+          if (legacyPartitionPending && rootPartition && rootPartition.index !== 0) return;
           yield emit();
           return;
         }
@@ -421,9 +431,24 @@ export function* iterFastDownsets(
           const branchMark = undoStack.length;
           apply(bestDomain[branchIndex]);
           try {
-            yield* search(branchPath, branchDepth + 1);
+            yield* search(branchPath, branchDepth + 1, false);
           } finally {
             undoTo(branchMark);
+          }
+          return;
+        }
+
+        if (legacyPartitionPending && rootPartition) {
+          const branchStart = Math.floor(bestDomain.length * rootPartition.index / rootPartition.count);
+          const branchEnd = Math.floor(bestDomain.length * (rootPartition.index + 1) / rootPartition.count);
+          for (let branchIndex = branchStart; branchIndex < branchEnd; branchIndex += 1) {
+            const branchMark = undoStack.length;
+            apply(bestDomain[branchIndex]);
+            try {
+              yield* search(null, 0, false);
+            } finally {
+              undoTo(branchMark);
+            }
           }
           return;
         }
@@ -432,7 +457,7 @@ export function* iterFastDownsets(
           const branchMark = undoStack.length;
           apply(bestDomain[branchIndex]);
           try {
-            yield* search(branchPath, branchDepth);
+            yield* search(branchPath, branchDepth, false);
           } finally {
             undoTo(branchMark);
           }
@@ -444,14 +469,14 @@ export function* iterFastDownsets(
     }
   }
 
-  if (rootPartition) {
+  if (rootPartition && hasOppositePair) {
     const tasks = planPartitionTasks();
     const [taskStart, taskEnd] = partitionTaskRange(tasks, rootPartition);
     for (let taskIndex = taskStart; taskIndex < taskEnd; taskIndex += 1) {
-      yield* search(tasks[taskIndex].path, 0);
+      yield* search(tasks[taskIndex].path, 0, false);
     }
   } else {
-    yield* search(null, 0);
+    yield* search(null, 0, rootPartition !== undefined);
   }
 }
 
