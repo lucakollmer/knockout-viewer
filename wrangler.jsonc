@@ -8,7 +8,7 @@
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/benchmarks", "/api/benchmarks/latest"]
+    "run_worker_first": ["/api/benchmarks", "/api/benchmarks/latest", "/api/benchmarks/readback/*"]
   },
   "kv_namespaces": [
     { "binding": "BENCHMARKS", "id": "4391d2480c8f4a87b2c92f989a5735f0" }
