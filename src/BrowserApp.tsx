@@ -12,10 +12,12 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import AsetsPanel from './AsetsPanel';
 import { emptyDirectValues, resolveDirectValues, type DirectField, type DirectValues } from './directInput';
-import type { GroupRow } from './groupMath';
+import { groupRow, type Group8, type GroupRow } from './groupMath';
 
 type NavigatorStatus = {
   computing: boolean;
+  streaming: boolean;
+  totalRows: number | null;
   lastCompletedR: number | null;
   cacheHits: number;
   lastDurationMs: number | null;
@@ -27,6 +29,8 @@ function useGroupNavigator(d: number, exactR?: number) {
   const [rows, setRows] = useState<GroupRow[]>([]);
   const [status, setStatus] = useState<NavigatorStatus>({
     computing: false,
+    streaming: false,
+    totalRows: null,
     lastCompletedR: null,
     cacheHits: 0,
     lastDurationMs: null,
@@ -42,32 +46,55 @@ function useGroupNavigator(d: number, exactR?: number) {
     const runId = ++runIdRef.current;
     rowCountRef.current = 0;
     setRows([]);
-    setStatus({ computing: true, lastCompletedR: null, cacheHits: 0, lastDurationMs: null, error: null, exactDone: false });
+    setStatus({
+      computing: true,
+      streaming: false,
+      totalRows: null,
+      lastCompletedR: null,
+      cacheHits: 0,
+      lastDurationMs: null,
+      error: null,
+      exactDone: false,
+    });
 
     const worker = new Worker(new URL('./workers/groupNavigator.worker.ts', import.meta.url), { type: 'module' });
     workerRef.current = worker;
     worker.onmessage = (event) => {
       const message = event.data as Record<string, unknown>;
       if (message.runId !== runId) return;
-      if (message.type === 'batch') {
-        const incoming = message.rows as GroupRow[];
+      if (message.type === 'batch-start') {
+        setStatus((previous) => ({
+          ...previous,
+          computing: true,
+          streaming: true,
+          totalRows: exactR === undefined ? null : message.batchRows as number,
+          cacheHits: previous.cacheHits + (message.cached ? 1 : 0),
+          lastDurationMs: message.durationMs as number,
+        }));
+      } else if (message.type === 'batch') {
+        const incoming = (message.groups as Group8[]).map(groupRow);
         setRows((previous) => {
           const next = previous.concat(incoming);
           rowCountRef.current = next.length;
           return next;
         });
+        const batchDone = Boolean(message.batchDone);
         setStatus((previous) => ({
           ...previous,
-          computing: false,
-          lastCompletedR: message.r as number,
-          cacheHits: previous.cacheHits + (message.cached ? 1 : 0),
-          lastDurationMs: message.durationMs as number,
+          computing: !batchDone,
+          streaming: !batchDone,
+          lastCompletedR: batchDone ? message.r as number : previous.lastCompletedR,
           exactDone: Boolean(message.done),
         }));
       } else if (message.type === 'progress') {
-        setStatus((previous) => ({ ...previous, computing: Boolean(message.computing), exactDone: Boolean(message.done) }));
+        setStatus((previous) => ({
+          ...previous,
+          computing: Boolean(message.computing),
+          streaming: false,
+          exactDone: Boolean(message.done),
+        }));
       } else if (message.type === 'error') {
-        setStatus((previous) => ({ ...previous, computing: false, error: String(message.message) }));
+        setStatus((previous) => ({ ...previous, computing: false, streaming: false, error: String(message.message) }));
       }
     };
     worker.postMessage({ type: 'start', runId, d, r: exactR, targetRows: 500 });
@@ -82,9 +109,12 @@ function useGroupNavigator(d: number, exactR?: number) {
   return { rows, status, requestMore };
 }
 
-function groupNotationText(row: GroupRow): string {
-  const block = (residue: number, multiplicity: number) => multiplicity === 1 ? String(residue) : `${residue}^${multiplicity}`;
-  return `1/${row.r} (${block(row.a, row.n)}, ${block(row.b, row.m)}, ${block(row.c, row.k)})`;
+function decimalDigits(value: number): number {
+  return String(Math.max(0, Math.trunc(value))).length;
+}
+
+function maxGroupNotationChars(d: number, r: number): number {
+  return 12 + 3 * decimalDigits(d) + 4 * decimalDigits(r);
 }
 
 function GroupNotation({ row }: { row: GroupRow }) {
@@ -138,7 +168,7 @@ function DirectSelector({ onOpen }: { onOpen: (row: GroupRow) => void }) {
           key={field}
           label={field}
           value={values[field]}
-          placeholder={resolution.inferred[field] === undefined ? '—' : `auto ${resolution.inferred[field]}`}
+          placeholder={resolution.inferred[field] === undefined ? '\u2014' : `auto ${resolution.inferred[field]}`}
           onChange={(event) => setField(field, event.target.value)}
           onKeyDown={(event) => { if (event.key === 'Enter' && canonical) onOpen(canonical); }}
           size="small"
@@ -221,10 +251,15 @@ function VirtualTable({ rows, selected, onSelect, onNeedMore }: {
   }, [selectedIndex]);
 
   const metrics = useMemo(() => {
-    const groupChars = Math.max('Group'.length, ...rows.map((row) => groupNotationText(row).length));
+    const maxD = rows[0]?.d ?? selected?.d ?? 3;
+    const maxR = rows[rows.length - 1]?.r ?? selected?.r ?? 2;
+    const dChars = decimalDigits(maxD);
+    const rChars = decimalDigits(maxR);
+    const groupChars = Math.max('Group'.length, maxGroupNotationChars(maxD, maxR));
     const groupWidth = Math.max(96, Math.min(210, Math.ceil(groupChars * 7 + 12)));
     const numericWidths = NUMBER_COLUMNS.map((name) => {
-      const chars = Math.max(name.length, ...rows.map((row) => String(row[name]).length));
+      const boundedChars = name === 'd' || name === 'n' || name === 'm' || name === 'k' ? dChars : rChars;
+      const chars = Math.max(name.length, boundedChars);
       return Math.max(28, Math.min(54, chars * 8 + 12));
     });
     const gap = 6;
@@ -234,7 +269,7 @@ function VirtualTable({ rows, selected, onSelect, onNeedMore }: {
       template: `${groupWidth}px ${numericWidths.map((width) => `${width}px`).join(' ')}`,
       totalWidth,
     };
-  }, [rows]);
+  }, [rows, selected]);
 
   const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
   const end = Math.min(rows.length, Math.ceil((scrollTop + height) / ROW_HEIGHT) + OVERSCAN);
@@ -457,10 +492,15 @@ export default function BrowserApp() {
                     </Stack>
                   </Box>
                   <Stack direction="row" useFlexGap sx={{ flexWrap: 'wrap', gap: 0.5, alignItems: 'center', justifyContent: { md: 'flex-end' } }}>
-                    <Chip size="small" label={`${rows.length.toLocaleString()} loaded`} />
+                    <Chip
+                      size="small"
+                      label={exactR !== undefined && status.totalRows !== null
+                        ? `${rows.length.toLocaleString()} / ${status.totalRows.toLocaleString()} loaded`
+                        : `${rows.length.toLocaleString()} loaded`}
+                    />
                     {exactR === undefined ? <Chip size="small" variant="outlined" label={status.lastCompletedR ? `through r=${status.lastCompletedR}` : 'starting r=2'} /> : null}
                     {exactR !== undefined && status.exactDone ? <Chip size="small" variant="outlined" label="r complete" /> : null}
-                    {status.computing ? <Chip size="small" color="primary" label="generating…" /> : null}
+                    {status.computing ? <Chip size="small" color="primary" label={status.streaming ? 'streaming\u2026' : 'generating\u2026'} /> : null}
                     {status.cacheHits ? <Chip size="small" variant="outlined" label={`${status.cacheHits} cached`} /> : null}
                     {status.lastDurationMs !== null && status.lastDurationMs > 250 ? <Chip size="small" variant="outlined" label={`${(status.lastDurationMs / 1000).toFixed(2)} s batch`} /> : null}
                   </Stack>

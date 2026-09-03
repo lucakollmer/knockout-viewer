@@ -1,10 +1,12 @@
 /// <reference lib="webworker" />
 
-import { enumerateCanonicalGroupsForModulus, groupRow, type GroupRow } from '../groupMath';
+import { enumerateCanonicalGroupsForModulus, type Group8 } from '../groupMath';
 
 const CACHE_DB = 'knockout-group-cache';
 const CACHE_STORE = 'batches';
-const CACHE_VERSION = 'group-enumerator-cfirst-v1';
+const CACHE_VERSION = 'group-enumerator-cfirst-v2';
+const MAX_CACHE_ROWS = 20_000;
+const POST_CHUNK_ROWS = 4_096;
 
 type StartMessage = {
   type: 'start';
@@ -22,6 +24,13 @@ type MoreMessage = {
 
 type InMessage = StartMessage | MoreMessage;
 
+type GroupBatch = {
+  groups: Group8[];
+  cached: boolean;
+  cacheSkipped: boolean;
+  durationMs: number;
+};
+
 let activeRun = 0;
 let dimension = 3;
 let exactModulus: number | undefined;
@@ -32,6 +41,10 @@ let running = false;
 
 function post(payload: Record<string, unknown>): void {
   self.postMessage({ runId: activeRun, ...payload });
+}
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 let cachePromise: Promise<IDBDatabase | null> | null = null;
@@ -54,7 +67,7 @@ function openCache(): Promise<IDBDatabase | null> {
   return cachePromise;
 }
 
-async function readCache(d: number, r: number): Promise<GroupRow[] | null> {
+async function readCache(d: number, r: number): Promise<Group8[] | null> {
   const db = await openCache();
   if (!db) return null;
   const key = `${CACHE_VERSION}:${d}:${r}`;
@@ -62,30 +75,77 @@ async function readCache(d: number, r: number): Promise<GroupRow[] | null> {
     const tx = db.transaction(CACHE_STORE, 'readonly');
     const request = tx.objectStore(CACHE_STORE).get(key);
     request.onerror = () => resolve(null);
-    request.onsuccess = () => resolve((request.result as GroupRow[] | undefined) ?? null);
+    request.onsuccess = () => resolve((request.result as Group8[] | undefined) ?? null);
   });
 }
 
-async function writeCache(d: number, r: number, rows: GroupRow[]): Promise<void> {
+async function writeCache(d: number, r: number, groups: Group8[]): Promise<void> {
   const db = await openCache();
   if (!db) return;
   const key = `${CACHE_VERSION}:${d}:${r}`;
   await new Promise<void>((resolve) => {
     const tx = db.transaction(CACHE_STORE, 'readwrite');
-    tx.objectStore(CACHE_STORE).put(rows, key);
+    tx.objectStore(CACHE_STORE).put(groups, key);
     tx.onerror = () => resolve();
     tx.oncomplete = () => resolve();
   });
 }
 
-async function batchFor(d: number, r: number): Promise<{ rows: GroupRow[]; cached: boolean; durationMs: number }> {
+async function batchFor(d: number, r: number): Promise<GroupBatch> {
   const cached = await readCache(d, r);
-  if (cached) return { rows: cached, cached: true, durationMs: 0 };
+  if (cached) return { groups: cached, cached: true, cacheSkipped: false, durationMs: 0 };
+
   const started = performance.now();
-  const rows = enumerateCanonicalGroupsForModulus(d, r).map(groupRow);
+  const groups = enumerateCanonicalGroupsForModulus(d, r);
   const durationMs = performance.now() - started;
-  void writeCache(d, r, rows);
-  return { rows, cached: false, durationMs };
+  const cacheSkipped = groups.length > MAX_CACHE_ROWS;
+  if (!cacheSkipped) void writeCache(d, r, groups);
+  return { groups, cached: false, cacheSkipped, durationMs };
+}
+
+async function emitBatch(run: number, r: number, batch: GroupBatch, doneWhenComplete: boolean): Promise<void> {
+  post({
+    type: 'batch-start',
+    d: dimension,
+    r,
+    batchRows: batch.groups.length,
+    cached: batch.cached,
+    cacheSkipped: batch.cacheSkipped,
+    durationMs: batch.durationMs,
+  });
+
+  if (batch.groups.length === 0) {
+    post({
+      type: 'batch',
+      d: dimension,
+      r,
+      groups: [],
+      totalRows: emittedRows,
+      batchRows: 0,
+      batchDone: true,
+      done: doneWhenComplete,
+    });
+    return;
+  }
+
+  for (let offset = 0; offset < batch.groups.length; offset += POST_CHUNK_ROWS) {
+    if (run !== activeRun) return;
+    const end = Math.min(batch.groups.length, offset + POST_CHUNK_ROWS);
+    const groups = batch.groups.slice(offset, end);
+    emittedRows += groups.length;
+    const batchDone = end === batch.groups.length;
+    post({
+      type: 'batch',
+      d: dimension,
+      r,
+      groups,
+      totalRows: emittedRows,
+      batchRows: batch.groups.length,
+      batchDone,
+      done: doneWhenComplete && batchDone,
+    });
+    if (!batchDone) await yieldToEventLoop();
+  }
 }
 
 async function generate(): Promise<void> {
@@ -97,17 +157,8 @@ async function generate(): Promise<void> {
       post({ type: 'progress', d: dimension, r: exactModulus, computing: true });
       const batch = await batchFor(dimension, exactModulus);
       if (run !== activeRun) return;
-      emittedRows = batch.rows.length;
-      post({
-        type: 'batch',
-        d: dimension,
-        r: exactModulus,
-        rows: batch.rows,
-        cached: batch.cached,
-        durationMs: batch.durationMs,
-        totalRows: emittedRows,
-        done: true,
-      });
+      await emitBatch(run, exactModulus, batch, true);
+      if (run !== activeRun) return;
       post({ type: 'progress', d: dimension, r: exactModulus, computing: false, done: true });
       return;
     }
@@ -117,19 +168,9 @@ async function generate(): Promise<void> {
       post({ type: 'progress', d: dimension, r, computing: true });
       const batch = await batchFor(dimension, r);
       if (run !== activeRun) return;
-      emittedRows += batch.rows.length;
+      await emitBatch(run, r, batch, false);
+      if (run !== activeRun) return;
       nextModulus += 1;
-      post({
-        type: 'batch',
-        d: dimension,
-        r,
-        rows: batch.rows,
-        cached: batch.cached,
-        durationMs: batch.durationMs,
-        totalRows: emittedRows,
-        done: false,
-      });
-      await new Promise((resolve) => setTimeout(resolve, 0));
     }
     if (run === activeRun) {
       post({ type: 'progress', d: dimension, r: nextModulus, computing: false, done: false });
