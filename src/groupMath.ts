@@ -133,10 +133,36 @@ function compareRep(a: Rep, b: Rep): number {
   return a.length === b.length ? 0 : a.length < b.length ? -1 : 1;
 }
 
+function compareRepPair(left: RepPair, right: RepPair): number {
+  return left[0] - right[0] || left[1] - right[1];
+}
+
+function scaledRepPair(pair: RepPair, r: number, unit: number): RepPair {
+  return [mod(unit * pair[0], r), pair[1]];
+}
+
 function scaleRep(rep: Rep, r: number, unit: number): Rep {
+  if (rep.length === 1) return [scaledRepPair(rep[0], r, unit)];
+
+  if (rep.length === 2) {
+    const first = scaledRepPair(rep[0], r, unit);
+    const second = scaledRepPair(rep[1], r, unit);
+    return compareRepPair(first, second) <= 0 ? [first, second] : [second, first];
+  }
+
+  if (rep.length === 3) {
+    let first = scaledRepPair(rep[0], r, unit);
+    let second = scaledRepPair(rep[1], r, unit);
+    let third = scaledRepPair(rep[2], r, unit);
+    if (compareRepPair(first, second) > 0) [first, second] = [second, first];
+    if (compareRepPair(second, third) > 0) [second, third] = [third, second];
+    if (compareRepPair(first, second) > 0) [first, second] = [second, first];
+    return [first, second, third];
+  }
+
   return rep
-    .map(([residue, multiplicity]) => [mod(unit * residue, r), multiplicity] as const)
-    .sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+    .map((pair) => scaledRepPair(pair, r, unit))
+    .sort(compareRepPair);
 }
 
 function repKey(rep: Rep): string {
@@ -339,8 +365,9 @@ export function enumerateCanonicalGroupsForModulus(d: number, r: number): Group8
     const table = solutionTable(r, s2);
     for (let x = 0; x < r; x += 1) {
       const rhs = mod(-s1 * x, r);
+      const rxGcd = gcd(r, x);
       for (const y of table[rhs]) {
-        if (x >= y || gcd(r, x, y) !== 1) continue;
+        if (x >= y || (rxGcd !== 1 && gcd(rxGcd, y) !== 1)) continue;
         addIfCanonical([
           [x, s1],
           [y, s2],
@@ -355,10 +382,12 @@ export function enumerateCanonicalGroupsForModulus(d: number, r: number): Group8
       const table = solutionTable(r, s3);
       for (let x = 0; x < r - 2; x += 1) {
         const sx = s1 * x;
+        const rxGcd = gcd(r, x);
         for (let y = x + 1; y < r - 1; y += 1) {
           const rhs = mod(-sx - s2 * y, r);
+          const rxyGcd = rxGcd === 1 ? 1 : gcd(rxGcd, y);
           for (const z of table[rhs]) {
-            if (z <= y || gcd(r, x, y, z) !== 1) continue;
+            if (z <= y || (rxyGcd !== 1 && gcd(rxyGcd, z) !== 1)) continue;
             addIfCanonical([
               [x, s1],
               [y, s2],
