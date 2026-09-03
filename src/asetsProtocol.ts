@@ -10,6 +10,20 @@ export type AsetsFamilyKey = readonly [
 
 export type AsetsComputationStatus = 'computing' | 'complete' | 'cancelled' | 'error';
 
+export type AsetsParallelShardTelemetry = {
+  shardIndex: number;
+  recordCount: number;
+  modulusContextSetupMs: number;
+  candidateCspEnumerationMs: number;
+  geometryMs: number;
+  totalWorkerComputeMs: number;
+  nodes: number;
+  compatibilityChecks: number;
+  singletonPropagations: number;
+  branches: number;
+  candidateCount: number;
+};
+
 export type AsetsPerformance = {
   cacheHit: boolean;
   modulusContextSetupMs: number;
@@ -20,10 +34,12 @@ export type AsetsPerformance = {
   indexedDbReadMs: number;
   indexedDbWriteMs: number;
   peakUsedJsHeapBytes: number | null;
-  /** Number of compute workers used after the sequential workload probe. */
+  /** Number of compute workers used for the family. */
   parallelShards?: number;
-  /** Exact prefix record count computed sequentially before a parallel replay, or zero. */
+  /** Legacy replay-probe field retained for stored benchmark compatibility; current scheduler leaves this at zero. */
   parallelProbeRecords?: number;
+  /** Per-shard workload and search telemetry for parallel families. */
+  parallelShardTelemetry?: readonly AsetsParallelShardTelemetry[];
 };
 
 export type AsetsFamilyHeader = {
