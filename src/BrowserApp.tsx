@@ -10,6 +10,7 @@ import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
+import AsetsPanel from './AsetsPanel';
 import { emptyDirectValues, resolveDirectValues, type DirectField, type DirectValues } from './directInput';
 import type { GroupRow } from './groupMath';
 
@@ -81,6 +82,11 @@ function useGroupNavigator(d: number, exactR?: number) {
   return { rows, status, requestMore };
 }
 
+function groupNotationText(row: GroupRow): string {
+  const block = (residue: number, multiplicity: number) => multiplicity === 1 ? String(residue) : `${residue}^${multiplicity}`;
+  return `1/${row.r} (${block(row.a, row.n)}, ${block(row.b, row.m)}, ${block(row.c, row.k)})`;
+}
+
 function GroupNotation({ row }: { row: GroupRow }) {
   const block = (residue: number, multiplicity: number) => (
     <Box component="span" sx={{ whiteSpace: 'nowrap' }}>
@@ -89,7 +95,7 @@ function GroupNotation({ row }: { row: GroupRow }) {
     </Box>
   );
   return (
-    <Typography component="span" variant="body2" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
+    <Typography component="span" variant="body2" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600, whiteSpace: 'nowrap' }}>
       1/{row.r} ({block(row.a, row.n)}, {block(row.b, row.m)}, {block(row.c, row.k)})
     </Typography>
   );
@@ -144,8 +150,8 @@ function DirectSelector({ onOpen }: { onOpen: (row: GroupRow) => void }) {
 
   return (
     <Card variant="outlined">
-      <CardContent>
-        <Stack spacing={1.25}>
+      <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+        <Stack spacing={1}>
           <Box>
             <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Direct selection</Typography>
             <Typography variant="caption" color="text.secondary">Enter three values in either row and leave the inferable fourth blank.</Typography>
@@ -164,11 +170,9 @@ function DirectSelector({ onOpen }: { onOpen: (row: GroupRow) => void }) {
             </Box>
           ) : null}
           {resolution.error || canonicalError ? <Alert severity="error">{resolution.error ?? canonicalError}</Alert> : null}
-          {!resolution.error && resolution.hint ? <Alert severity="info">{resolution.hint}</Alert> : null}
           {canonical ? (
-            <Paper variant="outlined" sx={{ p: 1.25, bgcolor: 'action.hover' }}>
-              <Typography variant="caption" color="text.secondary">Canonical effective presentation</Typography>
-              <Box sx={{ mt: 0.25 }}><GroupNotation row={canonical} /></Box>
+            <Paper variant="outlined" sx={{ p: 1, bgcolor: 'action.hover' }}>
+              <GroupNotation row={canonical} />
             </Paper>
           ) : null}
           <Stack direction="row" spacing={1}>
@@ -181,8 +185,9 @@ function DirectSelector({ onOpen }: { onOpen: (row: GroupRow) => void }) {
   );
 }
 
-const ROW_HEIGHT = 42;
+const ROW_HEIGHT = 36;
 const OVERSCAN = 10;
+const NUMBER_COLUMNS: Array<keyof Pick<GroupRow, 'd' | 'r' | 'n' | 'm' | 'k' | 'a' | 'b' | 'c'>> = ['d', 'r', 'n', 'm', 'k', 'a', 'b', 'c'];
 
 function VirtualTable({ rows, selected, onSelect, onNeedMore }: {
   rows: GroupRow[];
@@ -215,57 +220,81 @@ function VirtualTable({ rows, selected, onSelect, onNeedMore }: {
     }
   }, [selectedIndex]);
 
+  const metrics = useMemo(() => {
+    const groupChars = Math.max('Group'.length, ...rows.map((row) => groupNotationText(row).length));
+    const groupWidth = Math.max(96, Math.min(210, Math.ceil(groupChars * 7 + 12)));
+    const numericWidths = NUMBER_COLUMNS.map((name) => {
+      const chars = Math.max(name.length, ...rows.map((row) => String(row[name]).length));
+      return Math.max(28, Math.min(54, chars * 8 + 12));
+    });
+    const gap = 6;
+    const horizontalPadding = 12;
+    const totalWidth = groupWidth + numericWidths.reduce((sum, width) => sum + width, 0) + gap * NUMBER_COLUMNS.length + horizontalPadding;
+    return {
+      template: `${groupWidth}px ${numericWidths.map((width) => `${width}px`).join(' ')}`,
+      totalWidth,
+    };
+  }, [rows]);
+
   const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
   const end = Math.min(rows.length, Math.ceil((scrollTop + height) / ROW_HEIGHT) + OVERSCAN);
   const visible = rows.slice(start, end);
-  const columns = { xs: 'minmax(0,1fr) 56px', md: 'minmax(240px,1fr) repeat(8,56px)' };
 
-  const numberCell = (value: number, always = false) => (
-    <Typography variant="body2" sx={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', display: always ? 'block' : { xs: 'none', md: 'block' } }}>
+  const numberCell = (value: number) => (
+    <Typography variant="body2" sx={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
       {value}
     </Typography>
   );
 
+  const rowGrid = {
+    display: 'grid',
+    gridTemplateColumns: metrics.template,
+    columnGap: '6px',
+    alignItems: 'center',
+    px: 0.75,
+  } as const;
+
   return (
-    <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ display: 'grid', gridTemplateColumns: columns, gap: 0.5, px: 1.25, py: 0.8, bgcolor: 'action.hover', borderBottom: 1, borderColor: 'divider' }}>
-        <Typography variant="caption" sx={{ fontWeight: 700 }}>Group</Typography>
-        {['d', 'r', 'n', 'm', 'k', 'a', 'b', 'c'].map((name, index) => (
-          <Typography key={name} variant="caption" sx={{ fontWeight: 700, textAlign: 'right', display: index === 1 ? 'block' : { xs: 'none', md: 'block' } }}>{name}</Typography>
-        ))}
-      </Box>
-      <Box
-        ref={viewportRef}
-        onScroll={(event) => {
-          const element = event.currentTarget;
-          setScrollTop(element.scrollTop);
-          if (element.scrollHeight - element.scrollTop - element.clientHeight < 1200) onNeedMore();
-        }}
-        sx={{ flex: 1, minHeight: 0, overflowY: 'auto', position: 'relative' }}
-      >
-        <Box sx={{ height: rows.length * ROW_HEIGHT, position: 'relative' }}>
-          {visible.map((row, offset) => {
-            const index = start + offset;
-            const active = row.id === selected?.id;
-            return (
-              <Box
-                key={row.id}
-                tabIndex={0}
-                onClick={() => onSelect(row)}
-                onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onSelect(row); }}
-                sx={{
-                  position: 'absolute', top: index * ROW_HEIGHT, left: 0, right: 0, height: ROW_HEIGHT,
-                  display: 'grid', gridTemplateColumns: columns, gap: 0.5, alignItems: 'center', px: 1.25,
-                  borderBottom: 1, borderColor: 'divider', bgcolor: active ? 'action.selected' : 'background.paper',
-                  cursor: 'pointer', '&:hover': { bgcolor: active ? 'action.selected' : 'action.hover' },
-                }}
-              >
-                <Box sx={{ minWidth: 0, overflow: 'hidden' }}><GroupNotation row={row} /></Box>
-                {numberCell(row.d)}{numberCell(row.r, true)}{numberCell(row.n)}{numberCell(row.m)}
-                {numberCell(row.k)}{numberCell(row.a)}{numberCell(row.b)}{numberCell(row.c)}
-              </Box>
-            );
-          })}
+    <Box sx={{ flex: 1, minHeight: 0, overflowX: 'auto', overflowY: 'hidden', scrollbarGutter: 'stable' }}>
+      <Box sx={{ width: `max(100%, ${metrics.totalWidth}px)`, height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <Box sx={{ ...rowGrid, py: 0.65, bgcolor: 'action.hover', borderBottom: 1, borderColor: 'divider', flex: '0 0 auto' }}>
+          <Typography variant="caption" sx={{ fontWeight: 700 }}>Group</Typography>
+          {NUMBER_COLUMNS.map((name) => (
+            <Typography key={name} variant="caption" sx={{ fontWeight: 700, textAlign: 'right' }}>{name}</Typography>
+          ))}
+        </Box>
+        <Box
+          ref={viewportRef}
+          onScroll={(event) => {
+            const element = event.currentTarget;
+            setScrollTop(element.scrollTop);
+            if (element.scrollHeight - element.scrollTop - element.clientHeight < 1200) onNeedMore();
+          }}
+          sx={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', position: 'relative' }}
+        >
+          <Box sx={{ height: rows.length * ROW_HEIGHT, position: 'relative', width: '100%' }}>
+            {visible.map((row, offset) => {
+              const index = start + offset;
+              const active = row.id === selected?.id;
+              return (
+                <Box
+                  key={row.id}
+                  tabIndex={0}
+                  onClick={() => onSelect(row)}
+                  onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onSelect(row); }}
+                  sx={{
+                    ...rowGrid,
+                    position: 'absolute', top: index * ROW_HEIGHT, left: 0, right: 0, height: ROW_HEIGHT,
+                    borderBottom: 1, borderColor: 'divider', bgcolor: active ? 'action.selected' : 'background.paper',
+                    cursor: 'pointer', '&:hover': { bgcolor: active ? 'action.selected' : 'action.hover' },
+                  }}
+                >
+                  <Box sx={{ minWidth: 0, overflow: 'hidden' }}><GroupNotation row={row} /></Box>
+                  {NUMBER_COLUMNS.map((name) => <Box key={name}>{numberCell(row[name])}</Box>)}
+                </Box>
+              );
+            })}
+          </Box>
         </Box>
       </Box>
     </Box>
@@ -278,7 +307,22 @@ export default function BrowserApp() {
   const [exactR, setExactR] = useState<number | undefined>();
   const [modulusText, setModulusText] = useState('');
   const [selected, setSelected] = useState<GroupRow | null>(null);
+  const [navigatorHeight, setNavigatorHeight] = useState<number | null>(null);
+  const navigatorPaperRef = useRef<HTMLDivElement | null>(null);
   const { rows, status, requestMore } = useGroupNavigator(dimension, exactR);
+
+  useEffect(() => {
+    const element = navigatorPaperRef.current;
+    if (!element) return;
+    const syncHeight = () => {
+      const next = Math.round(element.getBoundingClientRect().height);
+      setNavigatorHeight((previous) => previous === next ? previous : next);
+    };
+    syncHeight();
+    const observer = new ResizeObserver(syncHeight);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   const updateDimension = (value: string) => {
     setDimensionText(value);
@@ -358,69 +402,118 @@ export default function BrowserApp() {
           <Typography variant="h5" sx={{ fontWeight: 800 }}>Knockout group browser</Typography>
           <Typography variant="body2" color="text.secondary">Canonical effective cyclic SL three-block presentations, generated locally as you navigate.</Typography>
         </Box>
-        <Box component="main" sx={{ p: { xs: 1.5, md: 2.5 }, display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(0,1fr) 390px' }, gap: 2, height: { lg: 'calc(100vh - 86px)' }, minHeight: 0 }}>
-          <Paper variant="outlined" sx={{ minHeight: { xs: 560, lg: 0 }, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            <Box sx={{ px: 1.5, py: 1, borderBottom: 1, borderColor: 'divider' }}>
-              <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} sx={{ justifyContent: 'space-between', alignItems: { md: 'flex-end' } }}>
-                <Box>
-                  <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Canonical groups</Typography>
-                  <Typography variant="caption" color="text.secondary">Order: r, then k, m, n, a, b, c. Scroll to generate more.</Typography>
-                  <Stack direction="row" spacing={0.75} sx={{ mt: 1, alignItems: 'center' }}>
-                    <TextField
-                      label="d"
-                      type="number"
-                      value={dimensionText}
-                      onChange={(event) => updateDimension(event.target.value)}
-                      onBlur={applyDimension}
-                      onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
-                      size="small"
-                      sx={{ width: 92 }}
-                      slotProps={{ htmlInput: { min: 3, step: 1, 'aria-label': 'Dimension d' } }}
-                    />
-                    <TextField
-                      label="r"
-                      type="number"
-                      value={modulusText}
-                      placeholder="all"
-                      onChange={(event) => updateModulus(event.target.value)}
-                      onBlur={applyModulus}
-                      onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
-                      size="small"
-                      sx={{ width: 112 }}
-                      slotProps={{ htmlInput: { min: 2, step: 1, 'aria-label': 'Modulus r; leave blank for all moduli' } }}
-                    />
+        <Box component="main" sx={{ p: { xs: 1.5, md: 2.5 }, display: 'flex', flexDirection: 'column', gap: 2, minHeight: 0 }}>
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: { xs: '1fr', lg: 'minmax(0,1fr) 390px' },
+              gap: 2,
+              minHeight: 0,
+              alignItems: 'start',
+            }}
+          >
+            <Paper
+              ref={navigatorPaperRef}
+              variant="outlined"
+              sx={{
+                boxSizing: 'border-box',
+                height: { xs: 'auto', lg: 'clamp(360px, calc(100dvh - 150px), 720px)' },
+                minHeight: { xs: 560, lg: 360 },
+                maxHeight: { lg: 1000 },
+                resize: { xs: 'none', lg: 'vertical' },
+                overflow: 'hidden',
+                display: 'flex',
+                flexDirection: 'column',
+              }}
+            >
+              <Box sx={{ px: 1.5, py: 1, borderBottom: 1, borderColor: 'divider' }}>
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} sx={{ justifyContent: 'space-between', alignItems: { md: 'flex-end' } }}>
+                  <Box>
+                    <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Canonical groups</Typography>
+                    <Stack direction="row" spacing={0.75} sx={{ mt: 0.75, alignItems: 'center' }}>
+                      <TextField
+                        label="d"
+                        type="number"
+                        value={dimensionText}
+                        onChange={(event) => updateDimension(event.target.value)}
+                        onBlur={applyDimension}
+                        onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+                        size="small"
+                        sx={{ width: 92 }}
+                        slotProps={{ htmlInput: { min: 3, step: 1, 'aria-label': 'Dimension d' } }}
+                      />
+                      <TextField
+                        label="r"
+                        type="number"
+                        value={modulusText}
+                        placeholder="all"
+                        onChange={(event) => updateModulus(event.target.value)}
+                        onBlur={applyModulus}
+                        onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+                        size="small"
+                        sx={{ width: 112 }}
+                        slotProps={{ htmlInput: { min: 2, step: 1, 'aria-label': 'Modulus r; leave blank for all moduli' } }}
+                      />
+                    </Stack>
+                  </Box>
+                  <Stack direction="row" useFlexGap sx={{ flexWrap: 'wrap', gap: 0.5, alignItems: 'center', justifyContent: { md: 'flex-end' } }}>
+                    <Chip size="small" label={`${rows.length.toLocaleString()} loaded`} />
+                    {exactR === undefined ? <Chip size="small" variant="outlined" label={status.lastCompletedR ? `through r=${status.lastCompletedR}` : 'starting r=2'} /> : null}
+                    {exactR !== undefined && status.exactDone ? <Chip size="small" variant="outlined" label="r complete" /> : null}
+                    {status.computing ? <Chip size="small" color="primary" label="generating…" /> : null}
+                    {status.cacheHits ? <Chip size="small" variant="outlined" label={`${status.cacheHits} cached`} /> : null}
+                    {status.lastDurationMs !== null && status.lastDurationMs > 250 ? <Chip size="small" variant="outlined" label={`${(status.lastDurationMs / 1000).toFixed(2)} s batch`} /> : null}
                   </Stack>
-                </Box>
-                <Stack direction="row" useFlexGap sx={{ flexWrap: 'wrap', gap: 0.5, alignItems: 'center', justifyContent: { md: 'flex-end' } }}>
-                  <Chip size="small" label={`${rows.length.toLocaleString()} loaded`} />
-                  {exactR === undefined ? <Chip size="small" variant="outlined" label={status.lastCompletedR ? `through r=${status.lastCompletedR}` : 'starting r=2'} /> : null}
-                  {exactR !== undefined && status.exactDone ? <Chip size="small" variant="outlined" label="r complete" /> : null}
-                  {status.computing ? <Chip size="small" color="primary" label="generating…" /> : null}
-                  {status.cacheHits ? <Chip size="small" variant="outlined" label={`${status.cacheHits} cached`} /> : null}
-                  {status.lastDurationMs !== null && status.lastDurationMs > 250 ? <Chip size="small" variant="outlined" label={`${(status.lastDurationMs / 1000).toFixed(2)} s batch`} /> : null}
                 </Stack>
+              </Box>
+              {status.error ? <Alert severity="error">{status.error}</Alert> : null}
+              <VirtualTable rows={rows} selected={selected} onSelect={setSelected} onNeedMore={requestMore} />
+            </Paper>
+
+            <Paper
+              variant="outlined"
+              sx={{
+                minHeight: 0,
+                height: { xs: 'auto', lg: navigatorHeight === null ? 'clamp(360px, calc(100dvh - 150px), 720px)' : `${navigatorHeight}px` },
+                overflowY: { lg: 'auto' },
+                overscrollBehavior: 'contain',
+                scrollbarGutter: 'stable',
+              }}
+            >
+              <Stack
+                spacing={0}
+                sx={{
+                  '& > .MuiCard-root': {
+                    border: 0,
+                    borderRadius: 0,
+                    boxShadow: 'none',
+                    flexShrink: 0,
+                  },
+                  '& > .MuiCard-root + .MuiCard-root': {
+                    borderTop: 1,
+                    borderColor: 'divider',
+                  },
+                }}
+              >
+                <Card variant="outlined"><CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Selected group</Typography>
+                  {selected ? <Stack spacing={1} sx={{ mt: 0.75 }}>
+                    <Paper variant="outlined" sx={{ p: 1, bgcolor: 'action.hover' }}><GroupNotation row={selected} /></Paper>
+                    <Stack direction="row" spacing={1}>
+                      <Button variant="outlined" disabled={selectedIndex <= 0} onClick={() => selectOffset(-1)} fullWidth>Previous</Button>
+                      <Button variant="outlined" disabled={selectedIndex < 0 || selectedIndex >= rows.length - 1} onClick={() => selectOffset(1)} fullWidth>Next</Button>
+                    </Stack>
+                  </Stack> : <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>Click a row or use direct selection.</Typography>}
+                </CardContent></Card>
+
+                <DirectSelector onOpen={openDirect} />
               </Stack>
-            </Box>
-            {status.error ? <Alert severity="error">{status.error}</Alert> : null}
-            <VirtualTable rows={rows} selected={selected} onSelect={setSelected} onNeedMore={requestMore} />
-          </Paper>
+            </Paper>
+          </Box>
 
-          <Stack spacing={1.5} sx={{ minHeight: 0, overflowY: { lg: 'auto' } }}>
-            <Card variant="outlined"><CardContent>
-              <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Selected group</Typography>
-              {selected ? <Stack spacing={1} sx={{ mt: 1 }}>
-                <Paper variant="outlined" sx={{ p: 1.2, bgcolor: 'action.hover' }}><GroupNotation row={selected} /></Paper>
-                <Typography variant="caption" color="text.secondary">d={selected.d}, r={selected.r}; n,m,k=({selected.n},{selected.m},{selected.k}); a,b,c=({selected.a},{selected.b},{selected.c})</Typography>
-                <Stack direction="row" spacing={1}>
-                  <Button variant="outlined" disabled={selectedIndex <= 0} onClick={() => selectOffset(-1)} fullWidth>Previous</Button>
-                  <Button variant="outlined" disabled={selectedIndex < 0 || selectedIndex >= rows.length - 1} onClick={() => selectOffset(1)} fullWidth>Next</Button>
-                </Stack>
-              </Stack> : <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>Click a row or use direct selection.</Typography>}
-            </CardContent></Card>
-
-            <DirectSelector onOpen={openDirect} />
-            <Typography variant="caption" color="text.secondary" sx={{ px: 0.5, pb: 1 }}>Enumeration runs entirely in your browser. Generated (d,r) batches are cached locally.</Typography>
-          </Stack>
+          <Box sx={{ minWidth: 0 }}>
+            <AsetsPanel selected={selected} />
+          </Box>
         </Box>
       </Box>
     </>
