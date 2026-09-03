@@ -2,12 +2,20 @@
 import { useEffect, useRef, useState } from 'react';
 import asetsWorkerUrl from './workers/asets.worker.ts?worker&url';
 import type { Point } from './asetsCore';
+import { effectiveRuntimeFamily } from './asetsRuntime';
 import type { AsetsCompleteMessage, AsetsWorkerMessage, AsetsWorkerRequest } from './asetsProtocol';
 
 const CASE_TIMEOUT_MS = 6_000;
 const EVENT_LOOP_SAMPLE_MS = 16;
 const THRESHOLDS_MS = [1_000, 5_000] as const;
-const MAX_SCENARIOS = 30;
+const MAX_SCENARIOS = 48;
+const MATRIX_R_TARGETS = [250, 415, 600, 780] as const;
+
+const PERMUTATIONS_3: readonly (readonly [number, number, number])[] = [
+  [0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0],
+];
+
+type BenchmarkAxis = 'frontier' | 'coefficient-matrix';
 
 type Profile = {
   id: string;
@@ -15,25 +23,171 @@ type Profile = {
   residues: (r: number) => Point;
 };
 
-const PROFILES: readonly Profile[] = [
+function gcd(first: number, second: number): number {
+  let a = Math.abs(first);
+  let b = Math.abs(second);
+  while (a !== 0) {
+    const next = b % a;
+    b = a;
+    a = next;
+  }
+  return b;
+}
+
+function mod(value: number, r: number): number {
+  const out = value % r;
+  return out < 0 ? out + r : out;
+}
+
+function findOrderThreeUnit(r: number): number | null {
+  for (let unit = 2; unit < r; unit += 1) {
+    if (gcd(unit, r) !== 1) continue;
+    if (mod(unit * unit * unit, r) === 1) return unit;
+  }
+  return null;
+}
+
+function orderThreeResidues(r: number): Point {
+  const unit = findOrderThreeUnit(r);
+  if (unit !== null) return [1, unit, mod(unit * unit, r)];
+  return [1, Math.max(2, Math.floor(r / 4)), r - 1];
+}
+
+function genericHashResidues(r: number): Point {
+  if (r <= 6) return [1, Math.min(2, r - 1), Math.min(3, r - 1)];
+  const span = r - 3;
+  const a = 2 + mod(r * 97 + 53, span);
+  let b = 2 + mod(r * 193 + 101, span);
+  for (let attempt = 0; attempt < span; attempt += 1) {
+    if (b !== a && mod(a + b, r) !== 0 && b !== r - 1) break;
+    b = 2 + mod(b - 1, span);
+  }
+  return [1, a, b];
+}
+
+const FRONTIER_PROFILES: readonly Profile[] = [
   {
     id: 'balanced-half',
-    label: 'balanced half',
+    label: 'legacy balanced half',
     residues: (r) => [1, Math.max(2, Math.floor(r / 2) - 1), r - 1],
   },
   {
     id: 'balanced-third',
-    label: 'balanced third',
+    label: 'legacy balanced third',
     residues: (r) => [1, Math.max(2, Math.floor(r / 3)), r - 1],
   },
 ];
 
+const MATRIX_PROFILES: readonly Profile[] = [
+  {
+    id: 'all-equal',
+    label: 'all coefficients equal',
+    residues: () => [1, 1, 1],
+  },
+  {
+    id: 'repeated-pair',
+    label: 'repeated pair with opposite axis',
+    residues: (r) => [1, 1, r - 1],
+  },
+  {
+    id: 'unit-cycle',
+    label: 'order-three unit cycle when available',
+    residues: orderThreeResidues,
+  },
+  {
+    id: 'generic-hash',
+    label: 'deterministic generic coefficients',
+    residues: genericHashResidues,
+  },
+];
+
+type CoefficientMetrics = {
+  effective_modulus: number;
+  canonical_residues: Point;
+  unit_count: number;
+  stabilizer_size: number;
+  orbit_size: number;
+  symmetry_class: 'generic' | 'pair-symmetric' | 'high-symmetry';
+  distinct_residue_count: number;
+  repeated_pair_count: number;
+  opposite_pair_count: number;
+  additive_orders: [number, number, number];
+  minimum_additive_order: number;
+};
+
+function coefficientMetrics(r: number, residues: Point): CoefficientMetrics {
+  const normalized = effectiveRuntimeFamily(r, residues);
+  const modulus = normalized.r;
+  const canonical = normalized.residues;
+  if (modulus === 1) {
+    return {
+      effective_modulus: 1,
+      canonical_residues: [0, 0, 0],
+      unit_count: 1,
+      stabilizer_size: 6,
+      orbit_size: 1,
+      symmetry_class: 'high-symmetry',
+      distinct_residue_count: 1,
+      repeated_pair_count: 3,
+      opposite_pair_count: 3,
+      additive_orders: [1, 1, 1],
+      minimum_additive_order: 1,
+    };
+  }
+
+  const units: number[] = [];
+  for (let unit = 1; unit < modulus; unit += 1) if (gcd(unit, modulus) === 1) units.push(unit);
+  let stabilizer = 0;
+  for (const permutation of PERMUTATIONS_3) {
+    for (const unit of units) {
+      let matches = true;
+      for (let axis = 0; axis < 3; axis += 1) {
+        if (mod(unit * canonical[permutation[axis]], modulus) !== canonical[axis]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) stabilizer += 1;
+    }
+  }
+
+  let repeatedPairs = 0;
+  let oppositePairs = 0;
+  for (let first = 0; first < 3; first += 1) {
+    for (let second = first + 1; second < 3; second += 1) {
+      if (canonical[first] === canonical[second]) repeatedPairs += 1;
+      if (mod(canonical[first] + canonical[second], modulus) === 0) oppositePairs += 1;
+    }
+  }
+  const orders = canonical.map((value) => modulus / gcd(modulus, value)) as [number, number, number];
+  const symmetryClass = stabilizer >= 3
+    ? 'high-symmetry'
+    : stabilizer === 2
+      ? 'pair-symmetric'
+      : 'generic';
+  return {
+    effective_modulus: modulus,
+    canonical_residues: canonical,
+    unit_count: units.length,
+    stabilizer_size: stabilizer,
+    orbit_size: Math.floor(6 * units.length / Math.max(1, stabilizer)),
+    symmetry_class: symmetryClass,
+    distinct_residue_count: new Set(canonical).size,
+    repeated_pair_count: repeatedPairs,
+    opposite_pair_count: oppositePairs,
+    additive_orders: orders,
+    minimum_additive_order: Math.min(...orders),
+  };
+}
+
 type ScenarioResult = {
   id: string;
+  benchmark_axis: BenchmarkAxis;
   mode: 'cold';
   r: number;
   residues: Point;
   profile: string;
+  coefficient_metrics: CoefficientMetrics;
   wall_ms: number;
   first_message_ms: number | null;
   first_chunk_ms: number | null;
@@ -66,7 +220,6 @@ type Frontier = {
 };
 
 type StoredResponse = { ok: true; id: string; sha: string; schema: string; received_at: string };
-
 type DelayProbe = { stop: () => { p95: number; max: number } };
 
 function percentile95(values: readonly number[]): number {
@@ -113,10 +266,17 @@ function deleteBenchmarkCache(cacheScope: string): Promise<void> {
   });
 }
 
-function runCase(runId: string, profile: Profile, r: number, requestId: number): Promise<ScenarioResult> {
+function runCase(
+  runId: string,
+  axis: BenchmarkAxis,
+  profile: Profile,
+  r: number,
+  requestId: number,
+): Promise<ScenarioResult> {
   return new Promise((resolve) => {
     const residues = profile.residues(r);
-    const cacheScope = `frontier-${runId}-${profile.id}-r${r}`;
+    const metrics = coefficientMetrics(r, residues);
+    const cacheScope = `${axis}-${runId}-${profile.id}-r${r}`;
     const worker = createBenchmarkWorker(cacheScope);
     const started = performance.now();
     const delayProbe = startDelayProbe();
@@ -138,11 +298,13 @@ function runCase(runId: string, profile: Profile, r: number, requestId: number):
       worker.terminate();
       void deleteBenchmarkCache(cacheScope);
       resolve({
-        id: `frontier-${profile.id}-r${r}`,
+        id: `${axis}-${profile.id}-r${r}`,
+        benchmark_axis: axis,
         mode: 'cold',
         r,
         residues,
         profile: profile.id,
+        coefficient_metrics: metrics,
         wall_ms: performance.now() - started,
         first_message_ms: firstMessageMs,
         first_chunk_ms: firstChunkMs,
@@ -192,7 +354,10 @@ function runCase(runId: string, profile: Profile, r: number, requestId: number):
       finish({ error: `worker error: ${event.message || 'failed to load or start'}` });
     });
     worker.addEventListener('messageerror', () => finish({ error: 'worker message deserialization error' }));
-    timeout = window.setTimeout(() => finish({ timed_out: true, error: `frontier timeout after ${CASE_TIMEOUT_MS} ms` }), CASE_TIMEOUT_MS);
+    timeout = window.setTimeout(
+      () => finish({ timed_out: true, error: `frontier timeout after ${CASE_TIMEOUT_MS} ms` }),
+      CASE_TIMEOUT_MS,
+    );
 
     const request: AsetsWorkerRequest = {
       type: 'compute',
@@ -200,7 +365,7 @@ function runCase(runId: string, profile: Profile, r: number, requestId: number):
       r,
       residues,
       includeRecords: true,
-      groupId: `frontier:${profile.id}:r${r}`,
+      groupId: `${axis}:${profile.id}:r${r}`,
     };
     worker.postMessage(request);
   });
@@ -214,7 +379,9 @@ function frontierFor(observations: readonly RObservation[], thresholdMs: number)
   const ordered = [...observations].sort((a, b) => a.r - b.r);
   const passing = ordered.filter((observation) => classify(observation, thresholdMs));
   const largestPass = passing.length ? passing[passing.length - 1].r : null;
-  const failingAbove = ordered.filter((observation) => !classify(observation, thresholdMs) && (largestPass === null || observation.r > largestPass));
+  const failingAbove = ordered.filter(
+    (observation) => !classify(observation, thresholdMs) && (largestPass === null || observation.r > largestPass),
+  );
   return {
     threshold_ms: thresholdMs,
     largest_tested_passing_r: largestPass,
@@ -248,6 +415,7 @@ export default function AsetsFrontierBenchmarkPage() {
   const [status, setStatus] = useState('ready');
   const [elapsedMs, setElapsedMs] = useState(0);
   const [observations, setObservations] = useState<RObservation[]>([]);
+  const [matrixScenarios, setMatrixScenarios] = useState<ScenarioResult[]>([]);
   const [stored, setStored] = useState<StoredResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -257,6 +425,7 @@ export default function AsetsFrontierBenchmarkPage() {
     setStored(null);
     setError(null);
     setObservations([]);
+    setMatrixScenarios([]);
     const runId = crypto.randomUUID();
     const startedAt = new Date().toISOString();
     const wallStart = performance.now();
@@ -264,27 +433,36 @@ export default function AsetsFrontierBenchmarkPage() {
     const maxR = maxExactR();
     const byR = new Map<number, RObservation>();
     const allScenarios: ScenarioResult[] = [];
+    const matrixResults: ScenarioResult[] = [];
     let requestId = 1;
 
     const evaluateR = async (rInput: number): Promise<RObservation> => {
       const r = Math.min(maxR, roundR(rInput));
       const existing = byR.get(r);
       if (existing) return existing;
-      if (allScenarios.length + PROFILES.length > MAX_SCENARIOS) throw new Error('frontier benchmark scenario budget exhausted');
+      if (allScenarios.length + FRONTIER_PROFILES.length > MAX_SCENARIOS) {
+        throw new Error('frontier benchmark scenario budget exhausted');
+      }
       const scenarios: ScenarioResult[] = [];
-      for (const profile of PROFILES) {
-        setStatus(`testing r=${r} — ${profile.label}`);
-        const result = await runCase(runId, profile, r, requestId++);
+      for (const profile of FRONTIER_PROFILES) {
+        setStatus(`frontier r=${r} — ${profile.label}`);
+        const result = await runCase(runId, 'frontier', profile, r, requestId++);
         scenarios.push(result);
         allScenarios.push(result);
       }
-      const worst = Math.max(...scenarios.map((scenario) => scenario.timed_out || scenario.error ? CASE_TIMEOUT_MS : scenario.wall_ms));
+      const worst = Math.max(...scenarios.map(
+        (scenario) => scenario.timed_out || scenario.error ? CASE_TIMEOUT_MS : scenario.wall_ms,
+      ));
       const observation: RObservation = {
         r,
         scenarios,
         worst_wall_ms: worst,
-        passed_1s: scenarios.every((scenario) => !scenario.timed_out && !scenario.error && scenario.wall_ms <= THRESHOLDS_MS[0]),
-        passed_5s: scenarios.every((scenario) => !scenario.timed_out && !scenario.error && scenario.wall_ms <= THRESHOLDS_MS[1]),
+        passed_1s: scenarios.every(
+          (scenario) => !scenario.timed_out && !scenario.error && scenario.wall_ms <= THRESHOLDS_MS[0],
+        ),
+        passed_5s: scenarios.every(
+          (scenario) => !scenario.timed_out && !scenario.error && scenario.wall_ms <= THRESHOLDS_MS[1],
+        ),
       };
       byR.set(r, observation);
       setObservations([...byR.values()].sort((a, b) => a.r - b.r));
@@ -298,7 +476,7 @@ export default function AsetsFrontierBenchmarkPage() {
         if (frontier.largest_tested_passing_r === null || frontier.smallest_tested_failing_r === null) return;
         const low = frontier.largest_tested_passing_r;
         const high = frontier.smallest_tested_failing_r;
-        if (high - low <= 2 || allScenarios.length + PROFILES.length > MAX_SCENARIOS) return;
+        if (high - low <= 2 || allScenarios.length + FRONTIER_PROFILES.length > MAX_SCENARIOS) return;
         const midpoint = roundR((low + high) / 2);
         if (midpoint === low || midpoint === high) return;
         await evaluateR(midpoint);
@@ -319,6 +497,18 @@ export default function AsetsFrontierBenchmarkPage() {
 
       await refine(5_000, 4);
       await refine(1_000, 4);
+
+      const matrixRs = [...new Set(MATRIX_R_TARGETS.map((value) => Math.min(maxR, value)))];
+      for (const matrixR of matrixRs) {
+        for (const profile of MATRIX_PROFILES) {
+          if (allScenarios.length >= MAX_SCENARIOS) break;
+          setStatus(`coefficient matrix r=${matrixR} — ${profile.label}`);
+          const result = await runCase(runId, 'coefficient-matrix', profile, matrixR, requestId++);
+          matrixResults.push(result);
+          allScenarios.push(result);
+          setMatrixScenarios([...matrixResults]);
+        }
+      }
 
       const ordered = [...byR.values()].sort((a, b) => a.r - b.r);
       const frontier1s = frontierFor(ordered, 1_000);
@@ -341,19 +531,28 @@ export default function AsetsFrontierBenchmarkPage() {
         },
         benchmark: {
           suite: 'interactive-asets-v1',
-          harness_version: 3,
-          benchmark_kind: 'adaptive-r-frontier',
+          harness_version: 4,
+          benchmark_kind: 'adaptive-r-frontier+coefficient-symmetry-matrix',
           case_timeout_ms: CASE_TIMEOUT_MS,
           event_loop_sample_ms: EVENT_LOOP_SAMPLE_MS,
           safety_stop: null,
           scenarios: allScenarios,
           frontier: {
             exact_number_backend_max_r: maxR,
-            profiles: PROFILES.map((profile) => profile.id),
-            classification: 'worst of deterministic sampled families at each r',
+            profiles: FRONTIER_PROFILES.map((profile) => profile.id),
+            classification: 'legacy two-profile envelope retained for historical comparison; r is not assumed to determine family complexity globally',
             under_1s: frontier1s,
             under_5s: frontier5s,
-            observations: ordered.map(({ r: observedR, worst_wall_ms, passed_1s, passed_5s }) => ({ r: observedR, worst_wall_ms, passed_1s, passed_5s })),
+            observations: ordered.map(({ r: observedR, worst_wall_ms, passed_1s, passed_5s }) => ({
+              r: observedR, worst_wall_ms, passed_1s, passed_5s,
+            })),
+          },
+          coefficient_matrix: {
+            r_values: matrixRs,
+            profiles: MATRIX_PROFILES.map((profile) => profile.id),
+            classification: 'fixed-r matrix spanning generic, repeated-axis, and high-stabilizer coefficient triples',
+            symmetry_metric: 'stabilizer of the effective canonical coefficient triple under coordinate permutations and unit multiplication modulo r',
+            scenarios: matrixResults,
           },
           dimension_semantics: {
             family_coordinate_dimension: 3,
@@ -380,15 +579,19 @@ export default function AsetsFrontierBenchmarkPage() {
   const frontier1s = frontierFor(observations, 1_000);
   const frontier5s = frontierFor(observations, 5_000);
   return (
-    <main style={{ maxWidth: 1080, margin: '0 auto', padding: 24, fontFamily: 'system-ui, sans-serif' }}>
-      <h1 style={{ marginBottom: 4 }}>Asets adaptive r-frontier benchmark</h1>
-      <p style={{ marginTop: 0, color: '#666' }}>Automatically searches for the largest sampled effective modulus under 1 s and 5 s, then uploads the trace.</p>
+    <main style={{ maxWidth: 1180, margin: '0 auto', padding: 24, fontFamily: 'system-ui, sans-serif' }}>
+      <h1 style={{ marginBottom: 4 }}>Asets adaptive frontier + coefficient-symmetry benchmark</h1>
+      <p style={{ marginTop: 0, color: '#666' }}>
+        Retains the historical r-frontier profiles, then measures fixed high-r families across distinct coefficient-symmetry classes.
+      </p>
       <p><b>Status:</b> {status} · <b>elapsed:</b> {(elapsedMs / 1000).toFixed(1)} s</p>
-      <p><b>1 s frontier:</b> {frontier1s.largest_tested_passing_r ?? '—'} {frontier1s.smallest_tested_failing_r ? `(next tested fail ${frontier1s.smallest_tested_failing_r})` : ''}</p>
-      <p><b>5 s frontier:</b> {frontier5s.largest_tested_passing_r ?? '—'} {frontier5s.smallest_tested_failing_r ? `(next tested fail ${frontier5s.smallest_tested_failing_r})` : ''}</p>
+      <p><b>1 s legacy envelope:</b> {frontier1s.largest_tested_passing_r ?? '—'} {frontier1s.smallest_tested_failing_r ? `(next tested fail ${frontier1s.smallest_tested_failing_r})` : ''}</p>
+      <p><b>5 s legacy envelope:</b> {frontier5s.largest_tested_passing_r ?? '—'} {frontier5s.smallest_tested_failing_r ? `(next tested fail ${frontier5s.smallest_tested_failing_r})` : ''}</p>
       {error ? <pre style={{ whiteSpace: 'pre-wrap', color: '#b00020' }}>{error}</pre> : null}
       {stored ? <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(stored, null, 2)}</pre> : null}
-      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 20 }}>
+
+      <h2>Legacy frontier envelope</h2>
+      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 12 }}>
         <thead><tr><th style={{ textAlign: 'left' }}>r</th><th style={{ textAlign: 'right' }}>worst wall</th><th style={{ textAlign: 'center' }}>≤1 s</th><th style={{ textAlign: 'center' }}>≤5 s</th></tr></thead>
         <tbody>{observations.map((observation) => (
           <tr key={observation.r}>
@@ -399,7 +602,23 @@ export default function AsetsFrontierBenchmarkPage() {
           </tr>
         ))}</tbody>
       </table>
-      <p style={{ color: '#666', marginTop: 20 }}>Here d=n+m+k is representation metadata and does not change A-set family compute cost. This engine is genuinely three-coordinate; d&gt;3 as block/coordinate count requires a generalized engine rather than a benchmark flag.</p>
+
+      <h2>Coefficient-symmetry matrix</h2>
+      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 12 }}>
+        <thead><tr><th style={{ textAlign: 'left' }}>r</th><th style={{ textAlign: 'left' }}>profile</th><th style={{ textAlign: 'right' }}>stabilizer</th><th style={{ textAlign: 'right' }}>records</th><th style={{ textAlign: 'right' }}>wall</th></tr></thead>
+        <tbody>{matrixScenarios.map((scenario) => (
+          <tr key={scenario.id}>
+            <td>{scenario.r}</td>
+            <td>{scenario.profile}</td>
+            <td style={{ textAlign: 'right' }}>{scenario.coefficient_metrics.stabilizer_size}</td>
+            <td style={{ textAlign: 'right' }}>{scenario.records_received}</td>
+            <td style={{ textAlign: 'right' }}>{scenario.wall_ms.toFixed(0)} ms{scenario.timed_out ? ' timeout' : ''}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+      <p style={{ color: '#666', marginTop: 20 }}>
+        The frontier remains only a historical envelope. The coefficient matrix is the optimization guide: equal r can have very different family sizes and runtimes because the coefficient triple can have additional automorphisms or low-order structure.
+      </p>
     </main>
   );
 }
